@@ -4,5 +4,7 @@
 //! - `graph`: In-memory graph representation and per-layer adjacency storage.
 
 pub mod graph;
+pub mod layer;
 
 pub use graph::{HnswGraph, HnswNode};
+pub use layer::{assign_layer, ml_factor, HnswConfig};
