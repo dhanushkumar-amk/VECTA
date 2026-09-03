@@ -6,6 +6,7 @@
 pub mod graph;
 pub mod insert;
 pub mod layer;
+pub mod search;
 pub mod search_layer;
 
 pub use graph::{HnswGraph, HnswNode};
