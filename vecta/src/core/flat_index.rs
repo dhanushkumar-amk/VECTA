@@ -21,6 +21,7 @@ pub enum Metric {
 ///
 /// Vectors are stored in a [`VectorBatch`] (single flat `Vec<f32>`),
 /// with a parallel `ids` vec mapping each row index to an external ID.
+#[derive(Debug, Clone)]
 pub struct FlatIndex {
     /// Contiguous vector storage.
     pub batch: VectorBatch,
