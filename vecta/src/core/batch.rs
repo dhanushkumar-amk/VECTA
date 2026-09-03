@@ -216,6 +216,7 @@ mod tests {
         // dot([1,1,1], [1,1,0]) = 2
         assert_approx(results[2], 2.0, 1e-4);
     }
+    
 
     #[test]
     fn test_batch_euclidean_distance() {
