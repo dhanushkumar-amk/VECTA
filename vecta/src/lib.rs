@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 /// delegating to `python.rs` for the actual implementations.
 #[pymodule]
 fn vecta(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<python::FlatIndex>()?;
     python::register(m)?;
     Ok(())
 }

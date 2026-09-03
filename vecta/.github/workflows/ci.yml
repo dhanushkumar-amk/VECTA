@@ -86,7 +86,7 @@ jobs:
           cache: pip
 
       - name: Install Python dependencies
-        run: pip install maturin pytest
+        run: pip install maturin pytest numpy
 
       - name: Build and install wheel
         run: maturin develop --release

@@ -24,3 +24,25 @@ class TestPhase1:
     def test_hello_vecta_type(self):
         """hello_vecta() returns a Python str."""
         assert isinstance(vecta.hello_vecta(), str)
+
+
+class TestPhase7:
+    """Phase 7: FlatIndex Python bindings smoke tests."""
+
+    def test_flat_index_smoke(self):
+        """Basic creation, add, len, and search smoke test."""
+        index = vecta.FlatIndex(dim=2, metric="euclidean")
+        assert len(index) == 0
+        assert index.is_empty()
+
+        index.add(1, [1.0, 2.0])
+        index.add(2, [3.0, 4.0])
+        assert len(index) == 2
+        assert not index.is_empty()
+
+        results = index.search([1.0, 2.0], k=2)
+        assert len(results) == 2
+        # Nearest vector to [1, 2] is id 1 with distance 0.0
+        assert results[0][0] == 1
+        assert abs(results[0][1] - 0.0) < 1e-5
+
