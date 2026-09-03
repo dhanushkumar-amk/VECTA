@@ -97,7 +97,7 @@ pub fn top_k_smallest(candidates: &[ScoredId], k: usize) -> Vec<ScoredId> {
             score: e.score.0,
         })
         .collect();
-    results.sort_by(|a, b| OrdF32(a.score).cmp(&OrdF32(b.score)));
+    results.sort_by_key(|a| OrdF32(a.score));
     results
 }
 
@@ -241,7 +241,7 @@ mod tests {
 
         // Naive: full sort then take first k
         let mut sorted = candidates.clone();
-        sorted.sort_by(|a, b| OrdF32(a.score).cmp(&OrdF32(b.score)));
+        sorted.sort_by_key(|a| OrdF32(a.score));
         let naive_result = &sorted[..k];
 
         // Must match exactly (same IDs, same scores, same order).
@@ -285,7 +285,7 @@ mod tests {
         // Naive sort approach
         let start = Instant::now();
         let mut sorted = candidates.clone();
-        sorted.sort_by(|a, b| OrdF32(a.score).cmp(&OrdF32(b.score)));
+        sorted.sort_by_key(|a| OrdF32(a.score));
         let _naive_result = &sorted[..k];
         let naive_elapsed = start.elapsed();
 

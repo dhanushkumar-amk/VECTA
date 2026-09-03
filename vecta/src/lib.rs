@@ -1,5 +1,5 @@
-mod python;
 pub mod core;
+mod python;
 
 use pyo3::prelude::*;
 

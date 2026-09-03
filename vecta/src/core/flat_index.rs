@@ -78,11 +78,9 @@ impl FlatIndex {
             vectors.num_vectors
         );
         assert_eq!(
-            vectors.dim,
-            self.batch.dim,
+            vectors.dim, self.batch.dim,
             "FlatIndex::add_batch: incoming dim {} != index dim {}",
-            vectors.dim,
-            self.batch.dim
+            vectors.dim, self.batch.dim
         );
 
         // ONE bulk duplicate check: incoming IDs vs existing index + within themselves.

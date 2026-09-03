@@ -15,7 +15,13 @@
 /// Panics if `a.len() != b.len()`.
 #[inline]
 pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "dot_product: dimension mismatch ({} vs {})", a.len(), b.len());
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "dot_product: dimension mismatch ({} vs {})",
+        a.len(),
+        b.len()
+    );
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
@@ -39,7 +45,13 @@ pub fn l1_norm(v: &[f32]) -> f32 {
 /// Panics if `a.len() != b.len()`.
 #[inline]
 pub fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "euclidean_distance: dimension mismatch ({} vs {})", a.len(), b.len());
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "euclidean_distance: dimension mismatch ({} vs {})",
+        a.len(),
+        b.len()
+    );
     a.iter()
         .zip(b.iter())
         .map(|(x, y)| {
@@ -58,7 +70,13 @@ pub fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
 /// Panics if `a.len() != b.len()`.
 #[inline]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "cosine_similarity: dimension mismatch ({} vs {})", a.len(), b.len());
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "cosine_similarity: dimension mismatch ({} vs {})",
+        a.len(),
+        b.len()
+    );
     let dot = dot_product(a, b);
     let norm_a = l2_norm(a);
     let norm_b = l2_norm(b);
@@ -149,7 +167,10 @@ mod tests {
         let zero = [0.0_f32, 0.0];
         // Either vector being zero → return 0.0, not NaN
         let result = cosine_similarity(&a, &zero);
-        assert!(!result.is_nan(), "cosine_similarity with zero vector must not be NaN");
+        assert!(
+            !result.is_nan(),
+            "cosine_similarity with zero vector must not be NaN"
+        );
         assert_approx(result, 0.0, 1e-4);
     }
 

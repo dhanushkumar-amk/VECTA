@@ -1,5 +1,7 @@
 # vecta
 
+[![CI](https://github.com/dhanushkumar-amk/vecta/actions/workflows/ci.yml/badge.svg)](https://github.com/dhanushkumar-amk/vecta/actions/workflows/ci.yml)
+
 A production-grade vector database built from scratch in Rust, benchmarked against FAISS.
 
 ## Architecture
