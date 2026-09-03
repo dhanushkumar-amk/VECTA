@@ -14,7 +14,7 @@
 use crate::core::batch::{batch_euclidean_distance, VectorBatch};
 use crate::core::flat_index::{FlatIndex, Metric};
 use crate::core::kmeans::{kmeans, KMeansConfig};
-use crate::core::topk::{top_k_smallest, ScoredId};
+use crate::core::topk::{top_k_largest, top_k_smallest, ScoredId};
 use crate::core::vector::euclidean_distance;
 
 /// An Inverted File (IVF) index structure.
@@ -292,6 +292,78 @@ impl IVFIndex {
             .into_iter()
             .map(|idx| self.inverted_lists[idx].len())
             .sum()
+    }
+
+    /// Search for the top-`k` nearest neighbors to `query` across the `nprobe` closest clusters.
+    ///
+    /// # Two-Stage Algorithm:
+    /// 1. **Coarse Phase**: Calls [`find_nearest_clusters`](Self::find_nearest_clusters)
+    ///    to prune search to the `nprobe` nearest Voronoi partitions (evaluated under L2 distance).
+    /// 2. **Fine Phase**: For each selected cluster, invokes [`FlatIndex::search`](FlatIndex::search)
+    ///    using the index's target metric ([`Metric`]), requesting `k` local candidates per cluster.
+    /// 3. **Global Merge**: Combines local candidates across all probed inverted lists and executes
+    ///    a final heap selection to return the global top-`k` results, sorted best-first.
+    ///
+    /// # Panics
+    /// - If `query.len() != self.dim`.
+    /// - If `!self.is_trained`.
+    pub fn search(&self, query: &[f32], k: usize, nprobe: usize) -> Vec<ScoredId> {
+        assert_eq!(
+            query.len(),
+            self.dim,
+            "IVFIndex::search: query dimension {} != index dimension {}",
+            query.len(),
+            self.dim
+        );
+        assert!(
+            self.is_trained,
+            "IVFIndex::search: cannot search an untrained index"
+        );
+
+        if k == 0 || self.is_empty() || nprobe == 0 {
+            return Vec::new();
+        }
+
+        let selected_clusters = self.find_nearest_clusters(query, nprobe);
+        let mut candidates: Vec<ScoredId> = Vec::with_capacity(selected_clusters.len() * k);
+
+        for &c in &selected_clusters {
+            let local_results = self.inverted_lists[c].search(query, k);
+            candidates.extend(local_results);
+        }
+
+        match self.metric {
+            Metric::Euclidean => top_k_smallest(&candidates, k),
+            Metric::Cosine | Metric::DotProduct => top_k_largest(&candidates, k),
+        }
+    }
+
+    /// Bulk search: executes [`search`](Self::search) for every query in `queries`.
+    ///
+    /// # Panics
+    /// - If `queries.dim != self.dim`.
+    /// - If `!self.is_trained`.
+    pub fn search_batch(
+        &self,
+        queries: &VectorBatch,
+        k: usize,
+        nprobe: usize,
+    ) -> Vec<Vec<ScoredId>> {
+        assert_eq!(
+            queries.dim, self.dim,
+            "IVFIndex::search_batch: queries dimension {} != index dimension {}",
+            queries.dim, self.dim
+        );
+        assert!(
+            self.is_trained,
+            "IVFIndex::search_batch: cannot search an untrained index"
+        );
+
+        let mut results = Vec::with_capacity(queries.len());
+        for i in 0..queries.len() {
+            results.push(self.search(queries.get(i), k, nprobe));
+        }
+        results
     }
 }
 
@@ -769,5 +841,321 @@ mod tests {
 
         // Full coverage when nprobe == k
         assert_eq!(cov10, n, "nprobe=k must cover 100% of vectors");
+    }
+
+    /// Phase 13 Test 1: Hand-verified IVF vs FlatIndex with nprobe=all (exhaustive).
+    /// With nprobe=num_clusters, IVF search results must EXACTLY match FlatIndex results.
+    #[test]
+    fn test_hand_verified_ivf_vs_flat_index_nprobe_all() {
+        let dim = 2;
+        let k = 2;
+
+        let points: Vec<(u64, [f32; 2])> = vec![
+            (1, [1.0, 1.0]),
+            (2, [1.0, 2.0]),
+            (3, [1.5, 1.5]),
+            (4, [9.0, 9.0]),
+            (5, [9.0, 8.0]),
+            (6, [8.5, 8.5]),
+        ];
+
+        let mut train_batch = VectorBatch::new(dim);
+        for (_, pt) in &points {
+            train_batch.push(pt);
+        }
+
+        // 1. Build & populate IVFIndex
+        let mut ivf = IVFIndex::new(dim, k, Metric::Euclidean);
+        let config = KMeansConfig {
+            k,
+            max_iterations: 100,
+            tolerance: 1e-4,
+        };
+        ivf.train(&train_batch, &config, 42);
+        for (id, pt) in &points {
+            ivf.add(*id, pt).unwrap();
+        }
+
+        // 2. Build & populate FlatIndex (our Correctness Oracle)
+        let mut flat = FlatIndex::new(dim, Metric::Euclidean);
+        for (id, pt) in &points {
+            flat.add(*id, pt);
+        }
+
+        // Query point
+        let query = [1.1, 1.2];
+        let target_k = 3;
+
+        let flat_results = flat.search(&query, target_k);
+        let ivf_results = ivf.search(&query, target_k, k); // nprobe = 2 (all clusters)
+
+        println!("\nPhase 13 Test 1: IVF vs FlatIndex comparison (nprobe=all):");
+        for i in 0..target_k {
+            println!(
+                "  Rank {}: Flat (id={}, dist={:.4}) | IVF (id={}, dist={:.4})",
+                i + 1,
+                flat_results[i].id,
+                flat_results[i].score,
+                ivf_results[i].id,
+                ivf_results[i].score
+            );
+        }
+
+        assert_eq!(ivf_results.len(), flat_results.len());
+        for i in 0..target_k {
+            assert_eq!(
+                ivf_results[i].id, flat_results[i].id,
+                "ID mismatch at rank {}",
+                i
+            );
+            assert!(
+                (ivf_results[i].score - flat_results[i].score).abs() < 1e-5,
+                "Score mismatch at rank {}",
+                i
+            );
+        }
+    }
+
+    /// Phase 13 Test 2: IVF with nprobe=1 correctly retrieves the top-1 neighbor.
+    #[test]
+    fn test_hand_verified_ivf_nprobe_1_top_1() {
+        let dim = 2;
+        let k = 2;
+
+        let points: Vec<(u64, [f32; 2])> = vec![
+            (1, [1.0, 1.0]),
+            (2, [1.0, 2.0]),
+            (3, [1.5, 1.5]),
+            (4, [9.0, 9.0]),
+            (5, [9.0, 8.0]),
+            (6, [8.5, 8.5]),
+        ];
+
+        let mut train_batch = VectorBatch::new(dim);
+        for (_, pt) in &points {
+            train_batch.push(pt);
+        }
+
+        let mut ivf = IVFIndex::new(dim, k, Metric::Euclidean);
+        let config = KMeansConfig {
+            k,
+            max_iterations: 100,
+            tolerance: 1e-4,
+        };
+        ivf.train(&train_batch, &config, 42);
+        for (id, pt) in &points {
+            ivf.add(*id, pt).unwrap();
+        }
+
+        let mut flat = FlatIndex::new(dim, Metric::Euclidean);
+        for (id, pt) in &points {
+            flat.add(*id, pt);
+        }
+
+        let query = [1.1, 1.2];
+        let flat_results = flat.search(&query, 3);
+        let ivf_results = ivf.search(&query, 3, 1); // nprobe = 1
+
+        println!("\nPhase 13 Test 2: IVF nprobe=1 top-1 verification:");
+        println!(
+            "  Flat Top-1: id={}, dist={:.4}",
+            flat_results[0].id, flat_results[0].score
+        );
+        println!(
+            "  IVF  Top-1: id={}, dist={:.4}",
+            ivf_results[0].id, ivf_results[0].score
+        );
+
+        // Top-1 must be exact since query is firmly in Cluster A
+        assert_eq!(ivf_results[0].id, flat_results[0].id);
+        assert!((ivf_results[0].score - flat_results[0].score).abs() < 1e-5);
+    }
+
+    /// Phase 13 Test 3: Empty index returns empty Vec, no panic.
+    #[test]
+    fn test_search_empty_index_returns_empty() {
+        let mut ivf = IVFIndex::new(2, 2, Metric::Euclidean);
+        let mut train_data = VectorBatch::new(2);
+        train_data.push(&[1.0, 1.0]);
+        train_data.push(&[9.0, 9.0]);
+
+        let config = KMeansConfig {
+            k: 2,
+            max_iterations: 10,
+            tolerance: 1e-4,
+        };
+        ivf.train(&train_data, &config, 42);
+
+        // No vectors inserted
+        let results = ivf.search(&[1.0, 1.0], 5, 2);
+        assert!(results.is_empty());
+    }
+
+    /// Phase 13 Test 4: Untrained index panics on search().
+    #[test]
+    #[should_panic(expected = "cannot search an untrained index")]
+    fn test_search_untrained_panics() {
+        let ivf = IVFIndex::new(2, 2, Metric::Euclidean);
+        let _ = ivf.search(&[1.0, 1.0], 5, 1);
+    }
+
+    /// Phase 13 Test 5: Wrong query dimension panics on search().
+    #[test]
+    #[should_panic(expected = "query dimension 3 != index dimension 2")]
+    fn test_search_wrong_dimension_panics() {
+        let mut ivf = IVFIndex::new(2, 2, Metric::Euclidean);
+        let mut train_data = VectorBatch::new(2);
+        train_data.push(&[1.0, 1.0]);
+        train_data.push(&[9.0, 9.0]);
+
+        let config = KMeansConfig {
+            k: 2,
+            max_iterations: 10,
+            tolerance: 1e-4,
+        };
+        ivf.train(&train_data, &config, 42);
+
+        let _ = ivf.search(&[1.0, 2.0, 3.0], 5, 1);
+    }
+
+    /// Phase 13 Test 6: search_batch matches individual search calls.
+    #[test]
+    fn test_search_batch_matches_single_search() {
+        let dim = 2;
+        let k = 2;
+
+        let mut ivf = IVFIndex::new(dim, k, Metric::Euclidean);
+        let mut data = VectorBatch::new(dim);
+        data.push(&[1.0, 1.0]);
+        data.push(&[2.0, 2.0]);
+        data.push(&[9.0, 9.0]);
+        data.push(&[10.0, 10.0]);
+
+        let config = KMeansConfig {
+            k,
+            max_iterations: 10,
+            tolerance: 1e-4,
+        };
+        ivf.train(&data, &config, 42);
+        ivf.add_batch(&[10, 20, 30, 40], &data).unwrap();
+
+        let mut queries = VectorBatch::new(dim);
+        queries.push(&[1.1, 1.1]);
+        queries.push(&[9.5, 9.5]);
+
+        let batch_results = ivf.search_batch(&queries, 2, 2);
+        assert_eq!(batch_results.len(), 2);
+
+        for (q_idx, single_query) in [queries.get(0), queries.get(1)].iter().enumerate() {
+            let single_res = ivf.search(single_query, 2, 2);
+            assert_eq!(batch_results[q_idx].len(), single_res.len());
+            for r in 0..single_res.len() {
+                assert_eq!(batch_results[q_idx][r].id, single_res[r].id);
+                assert!((batch_results[q_idx][r].score - single_res[r].score).abs() < 1e-5);
+            }
+        }
+    }
+
+    /// Phase 13 Test 7: Recall vs nprobe curve:
+    /// Compare IVFIndex against FlatIndex (ground truth) across multiple nprobe values.
+    /// Confirm recall@10 increases monotonically with nprobe, reaching 100% when nprobe=all.
+    #[test]
+    fn test_recall_vs_nprobe_progression() {
+        let n = 1000;
+        let dim = 32;
+        let k_clusters = 16;
+        let top_k = 10;
+        let num_queries = 20;
+
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // 1. Generate dataset
+        let mut data = VectorBatch::new(dim);
+        for _ in 0..n {
+            let mut v = Vec::with_capacity(dim);
+            for _ in 0..dim {
+                v.push(rng.gen_range(-10.0..10.0));
+            }
+            data.push(&v);
+        }
+
+        // 2. Build Ground-Truth Oracle (FlatIndex)
+        let mut flat = FlatIndex::new(dim, Metric::Euclidean);
+        let ids: Vec<u64> = (0..n as u64).collect();
+        flat.add_batch(&ids, &data);
+
+        // 3. Build IVFIndex
+        let mut ivf = IVFIndex::new(dim, k_clusters, Metric::Euclidean);
+        let config = KMeansConfig {
+            k: k_clusters,
+            max_iterations: 25,
+            tolerance: 1e-3,
+        };
+        ivf.train(&data, &config, 12345);
+        ivf.add_batch(&ids, &data).unwrap();
+
+        // 4. Generate queries
+        let mut queries = Vec::new();
+        for _ in 0..num_queries {
+            let mut q = Vec::with_capacity(dim);
+            for _ in 0..dim {
+                q.push(rng.gen_range(-10.0..10.0));
+            }
+            queries.push(q);
+        }
+
+        // Ground-truth nearest neighbors from FlatIndex
+        let mut ground_truth: Vec<Vec<u64>> = Vec::new();
+        for q in &queries {
+            let gt_results = flat.search(q, top_k);
+            ground_truth.push(gt_results.iter().map(|s| s.id).collect());
+        }
+
+        // Evaluate across nprobe = [1, 2, 4, 8, 16]
+        let nprobe_values = [1, 2, 4, 8, 16];
+        let mut recall_curve = Vec::new();
+
+        println!(
+            "\nPhase 13 Test 7: Recall@{} vs nprobe curve (N={}, k_clusters={}):",
+            top_k, n, k_clusters
+        );
+        for &nprobe in &nprobe_values {
+            let mut total_overlap = 0;
+            for (q_idx, q) in queries.iter().enumerate() {
+                let ivf_results = ivf.search(q, top_k, nprobe);
+                let ivf_ids: std::collections::HashSet<u64> =
+                    ivf_results.iter().map(|s| s.id).collect();
+
+                let gt_set: std::collections::HashSet<u64> =
+                    ground_truth[q_idx].iter().copied().collect();
+
+                total_overlap += ivf_ids.intersection(&gt_set).count();
+            }
+
+            let recall = (total_overlap as f64) / ((num_queries * top_k) as f64);
+            recall_curve.push(recall);
+            println!(
+                "  nprobe={:>2}: Recall@{:<2} = {:>5.1}%",
+                nprobe,
+                top_k,
+                recall * 100.0
+            );
+        }
+
+        // Confirm recall increases monotonically
+        for i in 0..(recall_curve.len() - 1) {
+            assert!(
+                recall_curve[i] <= recall_curve[i + 1] + 1e-6,
+                "Recall must not drop as nprobe increases: {} > {}",
+                recall_curve[i],
+                recall_curve[i + 1]
+            );
+        }
+
+        // Full search (nprobe=k_clusters) must produce 100% recall against FlatIndex
+        assert!(
+            (recall_curve.last().unwrap() - 1.0).abs() < 1e-6,
+            "When nprobe == num_clusters, IVF recall must be exactly 100%"
+        );
     }
 }
