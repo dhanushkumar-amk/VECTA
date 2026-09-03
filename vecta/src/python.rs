@@ -152,6 +152,11 @@ impl FlatIndex {
         self.inner.len()
     }
 
+    /// Alias for `__len__`.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
     /// Return `true` if the index contains no vectors.
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()

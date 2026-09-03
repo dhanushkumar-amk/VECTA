@@ -439,8 +439,7 @@ mod tests {
 
             // Cross-check top-1.
             let top1_cos = &results_cos[0];
-            let recomputed_cos =
-                cosine_similarity(&query, &all_vectors[top1_cos.id as usize]);
+            let recomputed_cos = cosine_similarity(&query, &all_vectors[top1_cos.id as usize]);
             assert_approx(top1_cos.score, recomputed_cos, 1e-5);
         }
 
@@ -467,8 +466,7 @@ mod tests {
 
             // Cross-check top-1.
             let top1_dp = &results_dp[0];
-            let recomputed_dp =
-                dot_product(&query, &all_vectors[top1_dp.id as usize]);
+            let recomputed_dp = dot_product(&query, &all_vectors[top1_dp.id as usize]);
             assert_approx(top1_dp.score, recomputed_dp, 1e-5);
         }
     }
@@ -533,7 +531,12 @@ mod tests {
              total:   {:.3}ms\n  \
              avg/q:   {:.3}ms\n  \
              QPS:     {:.0}",
-            n, dim, num_queries, k, total_ms, avg_ms,
+            n,
+            dim,
+            num_queries,
+            k,
+            total_ms,
+            avg_ms,
             num_queries as f64 / (total_ms / 1000.0)
         );
     }

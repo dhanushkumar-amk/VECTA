@@ -11,3 +11,13 @@ dist/
 *.so
 *.pyd
 *.whl
+.pytest_cache/
+
+# Benchmark datasets and results
+benchmarks/datasets/*.fvecs
+benchmarks/datasets/*.ivecs
+benchmarks/datasets/*.npy
+benchmarks/datasets/*.tar.gz
+benchmarks/datasets/*.tgz
+benchmarks/datasets/siftsmall/
+benchmarks/results/*.json
