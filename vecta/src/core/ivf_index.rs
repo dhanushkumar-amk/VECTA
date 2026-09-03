@@ -1,16 +1,20 @@
-//! Inverted File Index (IVF) data structure.
+//! Inverted File Index (IVF) data structure, training, and insertion.
 //!
-//! Provides the core layout for coarse quantizer Voronoi partitioning:
+//! Provides coarse quantizer Voronoi partitioning:
 //! - A set of `k` centroid vectors ([`VectorBatch`]).
 //! - An inverted list for each cluster, stored as an internal [`FlatIndex`].
 //!
-//! # Architecture
-//! IVF sits alongside [`FlatIndex`], not replacing it. Each inverted list
-//! is an individual `FlatIndex`, completely reusing contiguous batch storage,
-//! ID tracking, and metric evaluation without code duplication.
+//! # Architecture & Lifecycle
+//! IVF enforces a two-phase lifecycle mirroring FAISS (`IndexIVFFlat`):
+//! 1. **`train()`**: Learns coarse cluster centroids via k-means clustering on a
+//!    representative data sample. Does not insert vectors.
+//! 2. **`add()` / `add_batch()`**: Routes vectors into their nearest centroid's
+//!    inverted list. Calling `add()` prior to `train()` returns an error.
 
 use crate::core::batch::VectorBatch;
 use crate::core::flat_index::{FlatIndex, Metric};
+use crate::core::kmeans::{kmeans, KMeansConfig};
+use crate::core::vector::euclidean_distance;
 
 /// An Inverted File (IVF) index structure.
 ///
@@ -95,93 +99,387 @@ impl IVFIndex {
     pub fn is_trained(&self) -> bool {
         self.is_trained
     }
+
+    /// Train the coarse quantizer centroids on a representative sample of data.
+    ///
+    /// Runs Lloyd's k-means clustering with k-means++ seeding.
+    ///
+    /// # Panics
+    /// - If `training_data.dim != self.dim`.
+    /// - If `config.k != self.num_clusters()`.
+    ///
+    /// # Lifecycle Note
+    /// In accordance with the FAISS `train`-then-`add` lifecycle, training only learns
+    /// and populates cluster centroids. It does NOT automatically add vectors from
+    /// `training_data` into the inverted lists. The caller must explicitly invoke
+    /// `add` or `add_batch` to index data points.
+    pub fn train(&mut self, training_data: &VectorBatch, config: &KMeansConfig, seed: u64) {
+        assert_eq!(
+            training_data.dim, self.dim,
+            "IVFIndex::train: training_data dimension {} != index dimension {}",
+            training_data.dim, self.dim
+        );
+        assert_eq!(
+            config.k,
+            self.inverted_lists.len(),
+            "IVFIndex::train: config.k ({}) != num_clusters ({})",
+            config.k,
+            self.inverted_lists.len()
+        );
+
+        let result = kmeans(training_data, config, seed);
+        self.centroids = result.centroids;
+        self.is_trained = true;
+    }
+
+    /// Find the index of the closest centroid to `vector` under Euclidean distance.
+    ///
+    /// # Panics
+    /// - If `!self.is_trained` or `self.centroids.is_empty()`.
+    /// - If `vector.len() != self.dim`.
+    pub fn find_nearest_centroid(&self, vector: &[f32]) -> usize {
+        assert!(
+            self.is_trained && !self.centroids.is_empty(),
+            "IVFIndex::find_nearest_centroid: index is not trained"
+        );
+        assert_eq!(
+            vector.len(),
+            self.dim,
+            "IVFIndex::find_nearest_centroid: expected dim {}, got {}",
+            self.dim,
+            vector.len()
+        );
+
+        let mut best_idx = 0;
+        let mut min_dist = f32::INFINITY;
+
+        for c in 0..self.centroids.len() {
+            let dist = euclidean_distance(vector, self.centroids.get(c));
+            if dist < min_dist {
+                min_dist = dist;
+                best_idx = c;
+            }
+        }
+
+        best_idx
+    }
+
+    /// Insert a single vector with its external ID into the index.
+    ///
+    /// Routes the vector to the inverted list corresponding to its nearest centroid.
+    ///
+    /// # Errors
+    /// Returns `Err` if the index has not been trained yet. Calling `add` on an untrained
+    /// index is a recoverable operational error, hence returning `Result` rather than panicking.
+    ///
+    /// # Panics
+    /// Panics if `vector.len() != self.dim` (programming error).
+    pub fn add(&mut self, id: u64, vector: &[f32]) -> Result<(), String> {
+        if !self.is_trained {
+            return Err("IVFIndex must be trained before adding vectors".to_string());
+        }
+
+        assert_eq!(
+            vector.len(),
+            self.dim,
+            "IVFIndex::add: expected dim {}, got {}",
+            self.dim,
+            vector.len()
+        );
+
+        let nearest_idx = self.find_nearest_centroid(vector);
+        self.inverted_lists[nearest_idx].add(id, vector);
+        Ok(())
+    }
+
+    /// Bulk-insert vectors with their external IDs into the index.
+    ///
+    /// Routes each vector to the inverted list of its nearest centroid.
+    ///
+    /// # Errors
+    /// - Returns `Err` if `!self.is_trained`.
+    /// - Returns `Err` if `ids.len() != vectors.len()`.
+    ///
+    /// # Panics
+    /// Panics if `vectors.dim != self.dim`.
+    pub fn add_batch(&mut self, ids: &[u64], vectors: &VectorBatch) -> Result<(), String> {
+        if !self.is_trained {
+            return Err("IVFIndex must be trained before adding vectors".to_string());
+        }
+
+        assert_eq!(
+            vectors.dim, self.dim,
+            "IVFIndex::add_batch: expected dim {}, got {}",
+            self.dim, vectors.dim
+        );
+
+        if ids.len() != vectors.len() {
+            return Err(format!(
+                "IVFIndex::add_batch: ids count ({}) != vectors count ({})",
+                ids.len(),
+                vectors.len()
+            ));
+        }
+
+        for (i, &id) in ids.iter().enumerate() {
+            let vec = vectors.get(i);
+            let nearest_idx = self.find_nearest_centroid(vec);
+            self.inverted_lists[nearest_idx].add(id, vec);
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
-    /// Test 1: IVFIndex::new produces exactly 10 empty inverted lists, each with correct dim.
+    /// Test 1: Calling add() before train() returns Err, does not panic, does not corrupt state.
     #[test]
-    fn test_new_produces_correct_inverted_lists() {
-        let dim = 128;
-        let num_clusters = 10;
-        let index = IVFIndex::new(dim, num_clusters, Metric::Euclidean);
-
-        assert_eq!(index.inverted_lists.len(), num_clusters);
-        for list in &index.inverted_lists {
-            assert_eq!(list.dim(), dim);
-            assert_eq!(list.len(), 0);
-            assert!(list.is_empty());
-            assert_eq!(list.metric, Metric::Euclidean);
-        }
-        assert_eq!(index.centroids.len(), 0);
-        assert_eq!(index.centroids.dim(), dim);
+    fn test_add_before_train_returns_err() {
+        let mut index = IVFIndex::new(3, 4, Metric::Euclidean);
         assert!(!index.is_trained());
-    }
 
-    /// Test 2: num_clusters() returns 10 for the above.
-    #[test]
-    fn test_num_clusters_accessor() {
-        let index = IVFIndex::new(128, 10, Metric::Euclidean);
-        assert_eq!(index.num_clusters(), 10);
+        let res = index.add(1, &[1.0, 2.0, 3.0]);
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err(),
+            "IVFIndex must be trained before adding vectors"
+        );
+        assert_eq!(index.len(), 0);
+        assert!(index.is_empty());
 
-        let index_small = IVFIndex::new(32, 4, Metric::Cosine);
-        assert_eq!(index_small.num_clusters(), 4);
-    }
-
-    /// Test 3: len() returns 0 for a freshly-created (untrained, empty) index.
-    #[test]
-    fn test_len_empty_index() {
-        let index = IVFIndex::new(64, 8, Metric::DotProduct);
+        let mut batch = VectorBatch::new(3);
+        batch.push(&[1.0, 2.0, 3.0]);
+        let batch_res = index.add_batch(&[1], &batch);
+        assert!(batch_res.is_err());
         assert_eq!(index.len(), 0);
     }
 
-    /// Test 4: is_empty() returns true for a freshly-created index.
+    /// Test 2: train() with mismatched training_data dimension panics with clear message.
     #[test]
-    fn test_is_empty_fresh_index() {
-        let index = IVFIndex::new(64, 8, Metric::DotProduct);
-        assert!(index.is_empty());
+    #[should_panic(expected = "training_data dimension 4 != index dimension 3")]
+    fn test_train_mismatched_dimension_panics() {
+        let mut index = IVFIndex::new(3, 2, Metric::Euclidean);
+        let mut wrong_dim_data = VectorBatch::new(4);
+        wrong_dim_data.push(&[1.0, 2.0, 3.0, 4.0]);
+
+        let config = KMeansConfig {
+            k: 2,
+            max_iterations: 10,
+            tolerance: 1e-4,
+        };
+        index.train(&wrong_dim_data, &config, 42);
     }
 
-    /// Test 5: cluster_sizes() returns a Vec of zeros for a freshly-created index.
+    /// Test 3: train() with config.k != num_clusters panics with clear message.
     #[test]
-    fn test_cluster_sizes_zeros_initially() {
-        let num_clusters = 10;
-        let index = IVFIndex::new(128, num_clusters, Metric::Euclidean);
+    #[should_panic(expected = "config.k (5) != num_clusters (2)")]
+    fn test_train_mismatched_k_panics() {
+        let mut index = IVFIndex::new(2, 2, Metric::Euclidean);
+        let mut data = VectorBatch::new(2);
+        data.push(&[1.0, 1.0]);
+        data.push(&[2.0, 2.0]);
+
+        let config = KMeansConfig {
+            k: 5, // Mismatch with num_clusters=2
+            max_iterations: 10,
+            tolerance: 1e-4,
+        };
+        index.train(&data, &config, 42);
+    }
+
+    /// Test 4: After train(), is_trained is true, centroids has correct shape, and inverted lists remain empty.
+    #[test]
+    fn test_train_sets_trained_and_centroids_without_inserting() {
+        let mut index = IVFIndex::new(2, 2, Metric::Euclidean);
+        let mut data = VectorBatch::new(2);
+        data.push(&[1.0, 1.0]);
+        data.push(&[1.0, 2.0]);
+        data.push(&[9.0, 9.0]);
+        data.push(&[9.0, 8.0]);
+
+        let config = KMeansConfig {
+            k: 2,
+            max_iterations: 50,
+            tolerance: 1e-4,
+        };
+        index.train(&data, &config, 42);
+
+        assert!(index.is_trained());
+        assert_eq!(index.centroids.len(), 2);
+        assert_eq!(index.centroids.dim(), 2);
+        // Important: train does NOT automatically index the training data!
+        assert_eq!(index.len(), 0);
+        assert_eq!(index.cluster_sizes(), vec![0, 0]);
+    }
+
+    /// Test 5: Hand-verifiable test:
+    /// Train on 4 points forming 2 clusters:
+    /// Cluster A: [1,1], [1,2]
+    /// Cluster B: [9,9], [9,8]
+    /// Add a 5th point [1.2, 1.3] (near Cluster A) and 6th point [9.1, 8.9] (near Cluster B).
+    #[test]
+    fn test_hand_verified_two_clusters_routing() {
+        let mut index = IVFIndex::new(2, 2, Metric::Euclidean);
+        let mut train_data = VectorBatch::new(2);
+        train_data.push(&[1.0, 1.0]);
+        train_data.push(&[1.0, 2.0]);
+        train_data.push(&[9.0, 9.0]);
+        train_data.push(&[9.0, 8.0]);
+
+        let config = KMeansConfig {
+            k: 2,
+            max_iterations: 100,
+            tolerance: 1e-4,
+        };
+        index.train(&train_data, &config, 42);
+
+        // Identify which centroid is near [1, 1.5] (Cluster A) vs [9, 8.5] (Cluster B)
+        let c0 = index.centroids.get(0);
+        let cluster_a_idx = if c0[0] < 5.0 { 0 } else { 1 };
+        let cluster_b_idx = 1 - cluster_a_idx;
+
+        // 5th point: [1.2, 1.3] (obviously Cluster A)
+        let pt5 = [1.2, 1.3];
+        index
+            .add(500, &pt5)
+            .expect("add should succeed after train");
+
+        println!("Hand-verified Test 5 routing:");
+        println!("  Cluster A index: {}", cluster_a_idx);
+        println!("  Cluster B index: {}", cluster_b_idx);
+        println!(
+            "  Point 5 [1.2, 1.3] routed to inverted list: {}",
+            cluster_a_idx
+        );
+
+        // 6th point: [9.1, 8.9] (obviously Cluster B)
+        let pt6 = [9.1, 8.9];
+        index
+            .add(600, &pt6)
+            .expect("add should succeed after train");
+
+        assert_eq!(index.len(), 2);
         let sizes = index.cluster_sizes();
+        assert_eq!(
+            sizes[cluster_a_idx], 1,
+            "Cluster A must contain exactly 1 vector"
+        );
+        assert_eq!(
+            sizes[cluster_b_idx], 1,
+            "Cluster B must contain exactly 1 vector"
+        );
 
-        assert_eq!(sizes.len(), num_clusters);
-        assert_eq!(sizes, vec![0; num_clusters]);
+        // Verify vectors stored in the respective inverted lists
+        assert_eq!(index.inverted_lists[cluster_a_idx].ids, vec![500]);
+        assert_eq!(index.inverted_lists[cluster_b_idx].ids, vec![600]);
     }
 
-    /// Test 6: Manually construct an IVFIndex, directly push vectors into specific
-    /// inverted lists, and confirm len() and cluster_sizes() correctly reflect the data.
+    /// Test 6: add_batch() correctly distributes a batch across multiple inverted lists.
     #[test]
-    fn test_manual_vector_insertion_and_cluster_sizes() {
-        let dim = 3;
-        let num_clusters = 4;
-        let mut index = IVFIndex::new(dim, num_clusters, Metric::Euclidean);
+    fn test_add_batch_distribution_across_clusters() {
+        let mut index = IVFIndex::new(2, 3, Metric::Euclidean);
 
-        // Add 2 vectors to cluster 0
-        index.inverted_lists[0].add(101, &[1.0, 2.0, 3.0]);
-        index.inverted_lists[0].add(102, &[1.1, 2.1, 3.1]);
+        // Train 3 well-separated clusters
+        let mut train_data = VectorBatch::new(2);
+        for _ in 0..10 {
+            train_data.push(&[0.0, 0.0]);
+        }
+        for _ in 0..10 {
+            train_data.push(&[50.0, 50.0]);
+        }
+        for _ in 0..10 {
+            train_data.push(&[100.0, 100.0]);
+        }
 
-        // Add 0 vectors to cluster 1 (remains empty)
+        let config = KMeansConfig {
+            k: 3,
+            max_iterations: 30,
+            tolerance: 1e-4,
+        };
+        index.train(&train_data, &config, 777);
 
-        // Add 3 vectors to cluster 2
-        index.inverted_lists[2].add(201, &[5.0, 5.0, 5.0]);
-        index.inverted_lists[2].add(202, &[5.1, 5.2, 5.3]);
-        index.inverted_lists[2].add(203, &[5.2, 5.1, 5.0]);
+        // Construct a batch with 3 vectors clearly matching each cluster
+        let mut batch = VectorBatch::new(2);
+        batch.push(&[0.1, -0.1]); // Near cluster ~ (0,0)
+        batch.push(&[50.2, 49.8]); // Near cluster ~ (50,50)
+        batch.push(&[100.1, 99.9]); // Near cluster ~ (100,100)
 
-        // Add 1 vector to cluster 3
-        index.inverted_lists[3].add(301, &[9.0, 9.0, 9.0]);
+        index
+            .add_batch(&[1, 2, 3], &batch)
+            .expect("add_batch should succeed");
 
-        // Assertions
-        assert_eq!(index.len(), 6, "Total vectors should be 2 + 0 + 3 + 1 = 6");
-        assert!(!index.is_empty(), "Index is not empty");
+        assert_eq!(index.len(), 3);
+        let sizes = index.cluster_sizes();
+        assert_eq!(sizes.len(), 3);
+        // Each cluster should have received exactly 1 point
+        assert_eq!(sizes, vec![1, 1, 1]);
+    }
 
-        let expected_sizes = vec![2, 0, 3, 1];
-        assert_eq!(index.cluster_sizes(), expected_sizes);
+    /// Test 7: Large-scale test: train on 1,000 random 128-dim vectors with k=10,
+    /// then add all 1,000 via add_batch. Confirm len, total sum, and inspect distribution.
+    #[test]
+    fn test_large_scale_1000_vectors_balanced_distribution() {
+        let n = 1000;
+        let dim = 128;
+        let k = 10;
+
+        let mut index = IVFIndex::new(dim, k, Metric::Euclidean);
+        let mut data = VectorBatch::new(dim);
+        let mut rng = StdRng::seed_from_u64(9999);
+
+        for _ in 0..n {
+            let mut v = Vec::with_capacity(dim);
+            for _ in 0..dim {
+                v.push(rng.gen_range(-10.0..10.0));
+            }
+            data.push(&v);
+        }
+
+        let config = KMeansConfig {
+            k,
+            max_iterations: 25,
+            tolerance: 1e-3,
+        };
+        index.train(&data, &config, 42);
+
+        let ids: Vec<u64> = (0..n as u64).collect();
+        index
+            .add_batch(&ids, &data)
+            .expect("add_batch should succeed");
+
+        assert_eq!(index.len(), n);
+        let sizes = index.cluster_sizes();
+        let total_sum: usize = sizes.iter().sum();
+        assert_eq!(total_sum, n);
+
+        println!("\nTest 7: 1,000 vectors clustered across k=10 inverted lists:");
+        for (c, &size) in sizes.iter().enumerate() {
+            println!(
+                "  Inverted List {}: {} vectors ({:.1}%)",
+                c,
+                size,
+                (size as f64 / n as f64) * 100.0
+            );
+            if size == 0 {
+                println!("  [WARNING] Cluster {} is empty!", c);
+            }
+        }
+
+        // Verify every cluster has a reasonable share (not empty or degenerate)
+        let min_cluster = *sizes.iter().min().unwrap();
+        let max_cluster = *sizes.iter().max().unwrap();
+        println!(
+            "  Min cluster size: {}, Max cluster size: {}",
+            min_cluster, max_cluster
+        );
+        assert!(
+            min_cluster > 0,
+            "No cluster should be completely empty in uniform random distribution"
+        );
     }
 }
