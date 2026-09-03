@@ -6,8 +6,13 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use rand::rngs::StdRng;
+use rand::SeedableRng;
+
 use crate::core::batch::VectorBatch;
 use crate::core::flat_index::{FlatIndex as CoreFlatIndex, Metric};
+use crate::core::hnsw::insert::insert as hnsw_insert;
+use crate::core::hnsw::{HnswConfig, HnswGraph};
 use crate::core::ivf_index::IVFIndex as CoreIVFIndex;
 use crate::core::kmeans::KMeansConfig;
 
@@ -371,6 +376,157 @@ impl IVFIndex {
         }
 
         Ok(self.inner.nprobe_coverage(&query, nprobe))
+    }
+}
+
+/// Python wrapper around the pure-Rust [`HnswGraph`].
+#[pyclass]
+pub struct HnswIndex {
+    inner: HnswGraph,
+    config: HnswConfig,
+    rng: StdRng,
+}
+
+#[pymethods]
+impl HnswIndex {
+    /// Create a new HNSW index with default or custom parameters.
+    #[new]
+    #[pyo3(signature = (dim, metric="euclidean", m=16, ef_construction=200, ef_search=50, seed=42))]
+    pub fn new(
+        dim: usize,
+        metric: &str,
+        m: usize,
+        ef_construction: usize,
+        ef_search: usize,
+        seed: u64,
+    ) -> PyResult<Self> {
+        if dim == 0 {
+            return Err(PyValueError::new_err("dimension must be greater than 0"));
+        }
+        if m <= 1 {
+            return Err(PyValueError::new_err("m must be greater than 1"));
+        }
+        if ef_construction == 0 {
+            return Err(PyValueError::new_err(
+                "ef_construction must be greater than 0",
+            ));
+        }
+
+        let rust_metric = parse_metric(metric)?;
+        let config = HnswConfig {
+            m,
+            ef_construction,
+            ef_search,
+        };
+
+        Ok(Self {
+            inner: HnswGraph::new(dim, rust_metric),
+            config,
+            rng: StdRng::seed_from_u64(seed),
+        })
+    }
+
+    /// Add a single vector with an external ID to the HNSW graph.
+    pub fn add(&mut self, id: u64, vector: Vec<f32>) -> PyResult<()> {
+        if vector.len() != self.inner.dim() {
+            return Err(PyValueError::new_err(format!(
+                "vector dimension mismatch: expected {}, got {}",
+                self.inner.dim(),
+                vector.len()
+            )));
+        }
+
+        hnsw_insert(&mut self.inner, id, &vector, &self.config, &mut self.rng)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Bulk-add vectors with external IDs to the HNSW graph sequentially.
+    ///
+    /// Note: HNSW insertion is inherently sequential because each new node connects
+    /// to nearest neighbors in the graph constructed up to that point.
+    pub fn add_batch(&mut self, ids: Vec<u64>, vectors: Vec<Vec<f32>>) -> PyResult<()> {
+        if ids.len() != vectors.len() {
+            return Err(PyValueError::new_err(format!(
+                "ids count ({}) != vectors count ({})",
+                ids.len(),
+                vectors.len()
+            )));
+        }
+
+        let dim = self.inner.dim();
+        for (i, v) in vectors.iter().enumerate() {
+            if v.len() != dim {
+                return Err(PyValueError::new_err(format!(
+                    "vector at index {} has dimension {}, expected {}",
+                    i,
+                    v.len(),
+                    dim
+                )));
+            }
+        }
+
+        for (i, &id) in ids.iter().enumerate() {
+            hnsw_insert(
+                &mut self.inner,
+                id,
+                &vectors[i],
+                &self.config,
+                &mut self.rng,
+            )
+            .map_err(PyValueError::new_err)?;
+        }
+
+        Ok(())
+    }
+
+    /// Search for top-`k` nearest neighbors with optional `ef_search` override.
+    #[pyo3(signature = (query, k, ef_search=None))]
+    pub fn search(
+        &self,
+        query: Vec<f32>,
+        k: usize,
+        ef_search: Option<usize>,
+    ) -> PyResult<Vec<(u64, f32)>> {
+        if query.len() != self.inner.dim() {
+            return Err(PyValueError::new_err(format!(
+                "query dimension mismatch: expected {}, got {}",
+                self.inner.dim(),
+                query.len()
+            )));
+        }
+
+        let ef = ef_search.unwrap_or(self.config.ef_search);
+        let scored = self.inner.search(&query, k, ef);
+        Ok(scored.into_iter().map(|s| (s.id, s.score)).collect())
+    }
+
+    /// Return the number of vectors stored in the index (`len(index)`).
+    pub fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Alias for `__len__`.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Return `true` if index contains no vectors.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Return vector dimensionality.
+    pub fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    /// Return a dictionary of node counts by maximum layer (`{layer: count}`).
+    pub fn max_layer_distribution(&self) -> std::collections::HashMap<usize, usize> {
+        let mut distribution = std::collections::HashMap::new();
+        for node in &self.inner.nodes {
+            *distribution.entry(node.max_layer).or_insert(0) += 1;
+        }
+        distribution
     }
 }
 

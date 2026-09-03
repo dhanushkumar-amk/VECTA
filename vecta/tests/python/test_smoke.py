@@ -83,3 +83,28 @@ class TestPhase14:
         assert results[0][0] == 1
         assert abs(results[0][1] - 0.0) < 1e-5
 
+
+class TestPhase19:
+    """Phase 19: HnswIndex Python bindings smoke tests."""
+
+    def test_hnsw_index_smoke(self):
+        """Basic creation, add, add_batch, len, max_layer_distribution, and search smoke test."""
+        index = vecta.HnswIndex(dim=2, metric="euclidean")
+        assert len(index) == 0
+        assert index.is_empty()
+
+        index.add(1, [1.0, 1.0])
+        index.add_batch([2, 3], [[1.0, 2.0], [9.0, 9.0]])
+        assert len(index) == 3
+        assert not index.is_empty()
+
+        dist = index.max_layer_distribution()
+        assert isinstance(dist, dict)
+        assert sum(dist.values()) == 3
+
+        results = index.search([1.0, 1.0], k=2)
+        assert len(results) == 2
+        assert results[0][0] == 1
+        assert abs(results[0][1] - 0.0) < 1e-5
+
+

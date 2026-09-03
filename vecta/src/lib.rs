@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 fn vecta(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<python::FlatIndex>()?;
     m.add_class::<python::IVFIndex>()?;
+    m.add_class::<python::HnswIndex>()?;
     python::register(m)?;
     Ok(())
 }
