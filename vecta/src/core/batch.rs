@@ -20,6 +20,7 @@ use super::vector::{cosine_similarity, dot_product, euclidean_distance};
 /// A contiguous batch of vectors stored in a single flat buffer.
 ///
 /// Row `i` occupies `data[i * dim .. (i + 1) * dim]`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct VectorBatch {
     /// Flat storage: length = `num_vectors * dim`.
     pub data: Vec<f32>,
@@ -37,6 +38,36 @@ impl VectorBatch {
             dim,
             num_vectors: 0,
         }
+    }
+
+    /// Number of vectors stored in the batch.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.num_vectors
+    }
+
+    /// Returns `true` if the batch contains no vectors.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.num_vectors == 0
+    }
+
+    /// Dimensionality of vectors in this batch.
+    #[inline]
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Access the underlying flat float slice.
+    #[inline]
+    pub fn data(&self) -> &[f32] {
+        &self.data
+    }
+
+    /// Clear all vectors from the batch.
+    pub fn clear(&mut self) {
+        self.data.clear();
+        self.num_vectors = 0;
     }
 
     /// Append a vector to the batch.
