@@ -46,3 +46,40 @@ class TestPhase7:
         assert results[0][0] == 1
         assert abs(results[0][1] - 0.0) < 1e-5
 
+
+class TestPhase14:
+    """Phase 14: IVFIndex Python bindings smoke tests."""
+
+    def test_ivf_index_smoke(self):
+        """Basic creation, train, add, len, cluster_sizes, and search smoke test."""
+        index = vecta.IVFIndex(dim=2, num_clusters=2, metric="euclidean")
+        assert len(index) == 0
+        assert index.is_empty()
+        assert not index.is_trained()
+
+        # Train with 4 points
+        train_data = [
+            [1.0, 1.0],
+            [1.0, 2.0],
+            [9.0, 9.0],
+            [9.0, 8.0],
+        ]
+        index.train(train_data, k=2, max_iterations=20, seed=42)
+        assert index.is_trained()
+
+        # Add vectors
+        index.add(1, [1.0, 1.0])
+        index.add(2, [9.0, 9.0])
+        assert len(index) == 2
+        assert not index.is_empty()
+
+        sizes = index.cluster_sizes()
+        assert len(sizes) == 2
+        assert sum(sizes) == 2
+
+        # Search with nprobe=2
+        results = index.search([1.0, 1.0], k=2, nprobe=2)
+        assert len(results) == 2
+        assert results[0][0] == 1
+        assert abs(results[0][1] - 0.0) < 1e-5
+
