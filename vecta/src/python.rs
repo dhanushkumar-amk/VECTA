@@ -261,9 +261,7 @@ impl IVFIndex {
             )));
         }
 
-        self.inner
-            .add(id, &vector)
-            .map_err(PyValueError::new_err)
+        self.inner.add(id, &vector).map_err(PyValueError::new_err)
     }
 
     /// Bulk-add vectors with external IDs to the index.
