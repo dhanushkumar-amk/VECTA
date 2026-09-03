@@ -11,9 +11,10 @@
 //! 2. **`add()` / `add_batch()`**: Routes vectors into their nearest centroid's
 //!    inverted list. Calling `add()` prior to `train()` returns an error.
 
-use crate::core::batch::VectorBatch;
+use crate::core::batch::{batch_euclidean_distance, VectorBatch};
 use crate::core::flat_index::{FlatIndex, Metric};
 use crate::core::kmeans::{kmeans, KMeansConfig};
+use crate::core::topk::{top_k_smallest, ScoredId};
 use crate::core::vector::euclidean_distance;
 
 /// An Inverted File (IVF) index structure.
@@ -228,6 +229,69 @@ impl IVFIndex {
         }
 
         Ok(())
+    }
+
+    /// Coarse search: compare query against all centroids to select the `nprobe` nearest clusters.
+    ///
+    /// # Arguments
+    /// * `query` - High-dimensional query vector.
+    /// * `nprobe` - Number of nearest centroids/clusters to return for fine scanning.
+    ///
+    /// # Panics
+    /// - If `query.len() != self.dim`.
+    /// - If `!self.is_trained` (searching an untrained index is a programming bug).
+    ///
+    /// # Metric Selection Note
+    /// Centroid comparison ALWAYS utilizes Euclidean (L2) distance, regardless of whether
+    /// `self.metric` is Cosine or Dot Product. This preserves geometric consistency with the
+    /// Voronoi partitioning learned during k-means clustering. In Phase 13, vectors within
+    /// the selected inverted lists are evaluated using `self.metric`.
+    pub fn find_nearest_clusters(&self, query: &[f32], nprobe: usize) -> Vec<usize> {
+        assert!(
+            self.is_trained,
+            "IVFIndex::find_nearest_clusters: cannot search an untrained index"
+        );
+        assert_eq!(
+            query.len(),
+            self.dim,
+            "IVFIndex::find_nearest_clusters: query dimension {} != index dimension {}",
+            query.len(),
+            self.dim
+        );
+
+        if nprobe == 0 || self.centroids.is_empty() {
+            return Vec::new();
+        }
+
+        let k = nprobe.min(self.centroids.len());
+
+        // Compute Euclidean distance from query to every centroid in parallel using Phase 3 batch engine
+        let dists = batch_euclidean_distance(query, &self.centroids);
+
+        // Map distances to candidate ScoredIds with centroid index
+        let candidates: Vec<ScoredId> = dists
+            .into_iter()
+            .enumerate()
+            .map(|(idx, dist)| ScoredId {
+                id: idx as u64,
+                score: dist,
+            })
+            .collect();
+
+        // Select the k nearest centroids, sorted ascending (nearest-first)
+        let top_clusters = top_k_smallest(&candidates, k);
+        top_clusters.into_iter().map(|s| s.id as usize).collect()
+    }
+
+    /// Return the total number of vectors across the `nprobe` nearest clusters to `query`.
+    ///
+    /// Diagnostic helper for inspecting the speed/recall trade-off surface.
+    pub fn nprobe_coverage(&self, query: &[f32], nprobe: usize) -> usize {
+        let selected = self.find_nearest_clusters(query, nprobe);
+        selected
+            .into_iter()
+            .map(|idx| self.inverted_lists[idx].len())
+            .sum()
     }
 }
 
@@ -481,5 +545,229 @@ mod tests {
             min_cluster > 0,
             "No cluster should be completely empty in uniform random distribution"
         );
+    }
+
+    /// Phase 12 Test 1: Hand-verifiable coarse search with nprobe=1.
+    /// Query clearly near cluster A returns cluster A's centroid index.
+    #[test]
+    fn test_coarse_search_hand_verified_nprobe_1() {
+        let mut index = IVFIndex::new(2, 2, Metric::Euclidean);
+        let mut train_data = VectorBatch::new(2);
+        train_data.push(&[1.0, 1.0]);
+        train_data.push(&[1.0, 2.0]);
+        train_data.push(&[9.0, 9.0]);
+        train_data.push(&[9.0, 8.0]);
+
+        let config = KMeansConfig {
+            k: 2,
+            max_iterations: 100,
+            tolerance: 1e-4,
+        };
+        index.train(&train_data, &config, 42);
+
+        let c0 = index.centroids.get(0);
+        let cluster_a_idx = if c0[0] < 5.0 { 0 } else { 1 };
+        let cluster_b_idx = 1 - cluster_a_idx;
+
+        // Query point: [1.1, 1.4] is obviously closest to Cluster A
+        let query_a = [1.1, 1.4];
+        let nearest_1 = index.find_nearest_clusters(&query_a, 1);
+
+        println!("Phase 12 Test 1 results:");
+        println!("  Cluster A index: {}", cluster_a_idx);
+        println!("  Cluster B index: {}", cluster_b_idx);
+        println!("  Query [1.1, 1.4] returned centroid: {:?}", nearest_1);
+
+        assert_eq!(nearest_1.len(), 1);
+        assert_eq!(nearest_1[0], cluster_a_idx);
+    }
+
+    /// Phase 12 Test 2: Hand-verifiable coarse search with nprobe=2.
+    /// Returns both clusters in nearest-first sorted order.
+    #[test]
+    fn test_coarse_search_hand_verified_nprobe_2() {
+        let mut index = IVFIndex::new(2, 2, Metric::Euclidean);
+        let mut train_data = VectorBatch::new(2);
+        train_data.push(&[1.0, 1.0]);
+        train_data.push(&[1.0, 2.0]);
+        train_data.push(&[9.0, 9.0]);
+        train_data.push(&[9.0, 8.0]);
+
+        let config = KMeansConfig {
+            k: 2,
+            max_iterations: 100,
+            tolerance: 1e-4,
+        };
+        index.train(&train_data, &config, 42);
+
+        let c0 = index.centroids.get(0);
+        let cluster_a_idx = if c0[0] < 5.0 { 0 } else { 1 };
+        let cluster_b_idx = 1 - cluster_a_idx;
+
+        // Query point closer to A than B
+        let query_a = [1.1, 1.4];
+        let nearest_2 = index.find_nearest_clusters(&query_a, 2);
+
+        println!("Phase 12 Test 2 results (nprobe=2):");
+        println!("  Returned cluster order: {:?}", nearest_2);
+
+        assert_eq!(nearest_2.len(), 2);
+        assert_eq!(nearest_2[0], cluster_a_idx);
+        assert_eq!(nearest_2[1], cluster_b_idx);
+    }
+
+    /// Phase 12 Test 3: nprobe >= num_clusters returns all cluster indices.
+    #[test]
+    fn test_coarse_search_nprobe_ge_num_clusters() {
+        let mut index = IVFIndex::new(2, 2, Metric::Euclidean);
+        let mut train_data = VectorBatch::new(2);
+        train_data.push(&[1.0, 1.0]);
+        train_data.push(&[9.0, 9.0]);
+
+        let config = KMeansConfig {
+            k: 2,
+            max_iterations: 10,
+            tolerance: 1e-4,
+        };
+        index.train(&train_data, &config, 42);
+
+        // Request nprobe=100 on k=2 index
+        let res = index.find_nearest_clusters(&[1.0, 1.0], 100);
+        assert_eq!(res.len(), 2);
+        assert!(res.contains(&0));
+        assert!(res.contains(&1));
+    }
+
+    /// Phase 12 Test 4: nprobe == 0 returns empty Vec.
+    #[test]
+    fn test_coarse_search_nprobe_zero() {
+        let mut index = IVFIndex::new(2, 2, Metric::Euclidean);
+        let mut train_data = VectorBatch::new(2);
+        train_data.push(&[1.0, 1.0]);
+        train_data.push(&[9.0, 9.0]);
+
+        let config = KMeansConfig {
+            k: 2,
+            max_iterations: 10,
+            tolerance: 1e-4,
+        };
+        index.train(&train_data, &config, 42);
+
+        let res = index.find_nearest_clusters(&[1.0, 1.0], 0);
+        assert!(res.is_empty());
+    }
+
+    /// Phase 12 Test 5: Calling find_nearest_clusters before train() panics with clear message.
+    #[test]
+    #[should_panic(expected = "cannot search an untrained index")]
+    fn test_find_nearest_clusters_untrained_panics() {
+        let index = IVFIndex::new(2, 2, Metric::Euclidean);
+        let _ = index.find_nearest_clusters(&[1.0, 1.0], 1);
+    }
+
+    /// Phase 12 Test 6: Wrong query dimension panics with clear message.
+    #[test]
+    #[should_panic(expected = "query dimension 3 != index dimension 2")]
+    fn test_find_nearest_clusters_wrong_dim_panics() {
+        let mut index = IVFIndex::new(2, 2, Metric::Euclidean);
+        let mut train_data = VectorBatch::new(2);
+        train_data.push(&[1.0, 1.0]);
+        train_data.push(&[9.0, 9.0]);
+
+        let config = KMeansConfig {
+            k: 2,
+            max_iterations: 10,
+            tolerance: 1e-4,
+        };
+        index.train(&train_data, &config, 42);
+
+        let _ = index.find_nearest_clusters(&[1.0, 2.0, 3.0], 1);
+    }
+
+    /// Phase 12 Test 7: nprobe_coverage on 1,000 vectors / k=10:
+    /// Confirm monotonic increase (1 -> 3 -> 5 -> 10) and full coverage at nprobe=10.
+    #[test]
+    fn test_nprobe_coverage_monotonicity() {
+        let n = 1000;
+        let dim = 128;
+        let k = 10;
+
+        let mut index = IVFIndex::new(dim, k, Metric::Euclidean);
+        let mut data = VectorBatch::new(dim);
+        let mut rng = StdRng::seed_from_u64(12345);
+
+        for _ in 0..n {
+            let mut v = Vec::with_capacity(dim);
+            for _ in 0..dim {
+                v.push(rng.gen_range(-10.0..10.0));
+            }
+            data.push(&v);
+        }
+
+        let config = KMeansConfig {
+            k,
+            max_iterations: 20,
+            tolerance: 1e-3,
+        };
+        index.train(&data, &config, 99);
+
+        let ids: Vec<u64> = (0..n as u64).collect();
+        index.add_batch(&ids, &data).unwrap();
+
+        // Sample query
+        let query = data.get(0);
+
+        let cov1 = index.nprobe_coverage(query, 1);
+        let cov3 = index.nprobe_coverage(query, 3);
+        let cov5 = index.nprobe_coverage(query, 5);
+        let cov10 = index.nprobe_coverage(query, 10);
+
+        println!(
+            "\nPhase 12 Test 7: nprobe coverage curve (N={}, k={}):",
+            n, k
+        );
+        println!(
+            "  nprobe=1:   {:>4} vectors ({:>5.1}%)",
+            cov1,
+            (cov1 as f64 / n as f64) * 100.0
+        );
+        println!(
+            "  nprobe=3:   {:>4} vectors ({:>5.1}%)",
+            cov3,
+            (cov3 as f64 / n as f64) * 100.0
+        );
+        println!(
+            "  nprobe=5:   {:>4} vectors ({:>5.1}%)",
+            cov5,
+            (cov5 as f64 / n as f64) * 100.0
+        );
+        println!(
+            "  nprobe=10:  {:>4} vectors ({:>5.1}%)",
+            cov10,
+            (cov10 as f64 / n as f64) * 100.0
+        );
+
+        // Monotonic non-decreasing check
+        assert!(
+            cov1 <= cov3,
+            "Coverage must not decrease: cov1={} > cov3={}",
+            cov1,
+            cov3
+        );
+        assert!(
+            cov3 <= cov5,
+            "Coverage must not decrease: cov3={} > cov5={}",
+            cov3,
+            cov5
+        );
+        assert!(
+            cov5 <= cov10,
+            "Coverage must not decrease: cov5={} > cov10={}",
+            cov5,
+            cov10
+        );
+
+        // Full coverage when nprobe == k
+        assert_eq!(cov10, n, "nprobe=k must cover 100% of vectors");
     }
 }
