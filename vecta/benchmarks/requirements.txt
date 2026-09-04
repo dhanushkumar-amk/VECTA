@@ -1,0 +1,8 @@
+# Benchmarking dependencies for vecta
+# Note: faiss-cpu is explicitly required (not faiss-gpu) to ensure fair,
+# apples-to-apples CPU-only comparison with vecta.
+numpy>=1.25.0
+faiss-cpu>=1.9.0
+requests>=2.28.0
+tqdm>=4.64.0
+pytest>=7.0.0
