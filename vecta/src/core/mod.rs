@@ -1,4 +1,5 @@
 pub mod batch;
+pub mod concurrent_index;
 pub mod flat_index;
 pub mod hnsw;
 pub mod ivf_index;
