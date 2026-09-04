@@ -70,7 +70,7 @@ def compute_qps(total_time_sec: float, query_count: int) -> float:
 
 def save_benchmark_result(
     benchmark_name: str,
-    metrics: Dict[str, Any],
+    metrics: Any,
     results_dir: Optional[str] = None,
 ) -> str:
     """
@@ -78,7 +78,7 @@ def save_benchmark_result(
 
     Args:
         benchmark_name: Base name for benchmark (e.g., 'flat_index').
-        metrics: Dictionary of benchmark measurements and metadata.
+        metrics: Dictionary or list of benchmark measurements and metadata.
         results_dir: Output directory (defaults to benchmarks/results).
 
     Returns:
@@ -95,11 +95,24 @@ def save_benchmark_result(
     filename = f"{benchmark_name}_{timestamp}.json"
     filepath = os.path.join(results_dir, filename)
 
-    payload = {
-        "benchmark": benchmark_name,
-        "timestamp": datetime.now().isoformat(),
-        **metrics,
-    }
+    if isinstance(metrics, list):
+        payload = {
+            "benchmark": benchmark_name,
+            "timestamp": datetime.now().isoformat(),
+            "sweep": metrics,
+        }
+    elif isinstance(metrics, dict):
+        payload = {
+            "benchmark": benchmark_name,
+            "timestamp": datetime.now().isoformat(),
+            **metrics,
+        }
+    else:
+        payload = {
+            "benchmark": benchmark_name,
+            "timestamp": datetime.now().isoformat(),
+            "data": metrics,
+        }
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)

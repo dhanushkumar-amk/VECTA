@@ -357,6 +357,475 @@ def print_comparison_table(results: Dict[str, Any]) -> None:
     print("=" * 80)
 
 
+def find_iso_recall(
+    sweep: List[Dict[str, Any]],
+    target_recall: float = 0.90,
+) -> Dict[str, Any]:
+    """
+    Interpolate throughput (QPS) and effective nprobe at a target recall level.
+
+    Uses piecewise linear interpolation between the two sweep points that bracket
+    `target_recall`. If `target_recall` is outside the sweep bounds, returns the nearest
+    boundary point and flags it as approximate.
+
+    Args:
+        sweep: List of per-nprobe result dictionaries.
+        target_recall: Desired recall level (default 0.90 for ~90% recall).
+
+    Returns:
+        Dictionary detailing estimated QPS, effective nprobe, and method for both libraries.
+    """
+    def _interp_engine(engine: str) -> Dict[str, Any]:
+        recall_key = f"{engine}_recall"
+        qps_key = f"{engine}_qps"
+
+        # Sort points by recall
+        points = sorted(
+            [(float(entry[recall_key]), float(entry[qps_key]), float(entry["nprobe"])) for entry in sweep],
+            key=lambda p: p[0],
+        )
+        if not points:
+            raise ValueError("Sweep data cannot be empty")
+
+        # Check exact match
+        for r, q, np_val in points:
+            if abs(r - target_recall) < 1e-4:
+                return {
+                    "target_recall": target_recall,
+                    "achieved_recall": r,
+                    "estimated_qps": q,
+                    "estimated_nprobe": float(np_val),
+                    "method": "exact",
+                }
+
+        # Check if target is bracketed by adjacent points
+        for i in range(len(points) - 1):
+            r1, q1, np1 = points[i]
+            r2, q2, np2 = points[i + 1]
+            if r1 <= target_recall <= r2 and r2 > r1:
+                alpha = (target_recall - r1) / (r2 - r1)
+                est_qps = q1 + alpha * (q2 - q1)
+                est_nprobe = np1 + alpha * (np2 - np1)
+                return {
+                    "target_recall": target_recall,
+                    "achieved_recall": target_recall,
+                    "estimated_qps": est_qps,
+                    "estimated_nprobe": est_nprobe,
+                    "method": "linear_interpolation",
+                    "bracket": ((r1, q1, np1), (r2, q2, np2)),
+                }
+
+        # Boundary fallback (target outside observed range)
+        if target_recall < points[0][0]:
+            r, q, np_val = points[0]
+            return {
+                "target_recall": target_recall,
+                "achieved_recall": r,
+                "estimated_qps": q,
+                "estimated_nprobe": float(np_val),
+                "method": "nearest_boundary_lower",
+            }
+        else:
+            r, q, np_val = points[-1]
+            return {
+                "target_recall": target_recall,
+                "achieved_recall": r,
+                "estimated_qps": q,
+                "estimated_nprobe": float(np_val),
+                "method": "nearest_boundary_upper",
+            }
+
+    vecta_iso = _interp_engine("vecta")
+    faiss_iso = _interp_engine("faiss")
+
+    v_qps = vecta_iso["estimated_qps"]
+    f_qps = faiss_iso["estimated_qps"]
+    ratio = f_qps / v_qps if v_qps > 0 else 1.0
+    faster_engine = "faiss" if ratio >= 1.0 else "vecta"
+    speedup = ratio if faster_engine == "faiss" else (1.0 / ratio if ratio > 0 else 1.0)
+
+    return {
+        "target_recall": target_recall,
+        "vecta": vecta_iso,
+        "faiss": faiss_iso,
+        "faster_engine": faster_engine,
+        "speedup_ratio": speedup,
+        "qps_ratio": ratio,
+    }
+
+
+def generate_ivf_plot(
+    results: Dict[str, Any],
+    output_path: Optional[str] = None,
+) -> str:
+    """
+    Generate and save a Recall@10 vs. QPS tradeoff curve plot.
+
+    Follows the standard ann-benchmarks.com visualization style:
+    - X-axis: Recall@10 against Ground Truth
+    - Y-axis: Search Throughput (Queries Per Second)
+    - Two lines: vecta.IVFIndex vs. faiss.IndexIVFFlat
+    - Annotations for nprobe values at each data point
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("[WARNING] matplotlib not installed; skipping plot generation.")
+        return ""
+
+    sweep = results.get("sweep", [])
+    if not sweep:
+        print("[WARNING] No sweep data available to plot.")
+        return ""
+
+    if output_path is None:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        results_dir = os.path.join(base_dir, "results")
+        os.makedirs(results_dir, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(results_dir, f"ivf_recall_vs_qps_{timestamp}.png")
+    else:
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+    nprobe_vals = [s["nprobe"] for s in sweep]
+    v_rec = [s["vecta_recall"] for s in sweep]
+    v_qps = [s["vecta_qps"] for s in sweep]
+    f_rec = [s["faiss_recall"] for s in sweep]
+    f_qps = [s["faiss_qps"] for s in sweep]
+
+    plt.figure(figsize=(9, 6), dpi=200)
+
+    # Plot lines with markers
+    plt.plot(
+        v_rec,
+        v_qps,
+        marker="o",
+        linewidth=2.2,
+        markersize=7,
+        color="#2563eb",
+        label="vecta.IVFIndex",
+    )
+    plt.plot(
+        f_rec,
+        f_qps,
+        marker="s",
+        linewidth=2.2,
+        markersize=7,
+        color="#ea580c",
+        label="faiss.IndexIVFFlat",
+    )
+
+    # Annotate nprobe values on points
+    for np_val, r, q in zip(nprobe_vals, v_rec, v_qps):
+        plt.annotate(
+            f"p={np_val}",
+            (r, q),
+            textcoords="offset points",
+            xytext=(6, -7),
+            fontsize=8,
+            color="#1d4ed8",
+            fontweight="bold",
+        )
+    for np_val, r, q in zip(nprobe_vals, f_rec, f_qps):
+        plt.annotate(
+            f"p={np_val}",
+            (r, q),
+            textcoords="offset points",
+            xytext=(6, 6),
+            fontsize=8,
+            color="#c2410c",
+            fontweight="bold",
+        )
+
+    dataset = results.get("dataset", "siftsmall")
+    num_vecs = results.get("num_vectors", 10000)
+    dim = results.get("dimension", 128)
+    nlist = results.get("nlist", 100)
+    k = results.get("k", 10)
+    threads = results.get("threads", 1)
+
+    plt.title(
+        f"IVF Recall@{k} vs. Throughput (QPS) — Vecta vs. FAISS\n"
+        f"Dataset: {dataset} (N={num_vecs:,}, D={dim}, nlist={nlist}) | Threads: {threads}",
+        fontsize=12,
+        fontweight="bold",
+        pad=12,
+    )
+    plt.xlabel(f"Recall@{k} against Ground Truth", fontsize=11, labelpad=8)
+    plt.ylabel("Search Throughput (Queries / Second)", fontsize=11, labelpad=8)
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.legend(frameon=True, facecolor="#f8fafc", edgecolor="#cbd5e1", fontsize=10)
+    plt.tight_layout()
+
+    plt.savefig(output_path, dpi=200)
+    plt.close()
+    return output_path
+
+
+def print_ivf_comparison_table(results: Any) -> None:
+    """
+    Format and print a per-nprobe sweep comparison table and iso-recall analysis.
+
+    Accepts either the full benchmark results dictionary or a list of per-nprobe dicts.
+    """
+    if isinstance(results, dict):
+        sweep = results.get("sweep", results.get("results", []))
+        dataset = results.get("dataset", "siftsmall")
+        num_vecs = results.get("num_vectors", 10000)
+        dim = results.get("dimension", 128)
+        k = results.get("k", 10)
+        nlist = results.get("nlist", 100)
+        threads = results.get("threads", 1)
+        v_btime = results.get("vecta_build_time_sec")
+        f_btime = results.get("faiss_build_time_sec")
+        iso = results.get("iso_recall")
+    elif isinstance(results, list):
+        sweep = results
+        dataset, num_vecs, dim, k, nlist, threads = "siftsmall", 10000, 128, 10, 100, 1
+        v_btime, f_btime = None, None
+        iso = find_iso_recall(sweep, 0.90) if sweep else None
+    else:
+        raise ValueError("Expected results dict or list of sweep dicts")
+
+    if not sweep:
+        print("[No IVF sweep results to display]")
+        return
+
+    if iso is None:
+        iso = find_iso_recall(sweep, 0.90)
+
+    print("\n" + "=" * 88)
+    print(" HEAD-TO-HEAD IVF COMPARISON: vecta.IVFIndex vs. faiss.IndexIVFFlat")
+    print(f" Dataset: {dataset} (N={num_vecs:,}, D={dim}) | nlist={nlist} | Target k={k} | Threads={threads}")
+    print("=" * 88)
+
+    if v_btime is not None and f_btime is not None:
+        v_bms = v_btime * 1000.0
+        f_bms = f_btime * 1000.0
+        if v_btime < f_btime:
+            b_faster = "vecta"
+            b_speedup = f_btime / v_btime if v_btime > 0 else 1.0
+        else:
+            b_faster = "faiss"
+            b_speedup = v_btime / f_btime if f_btime > 0 else 1.0
+        print(f" Build Time (train + add): vecta = {v_bms:.1f} ms | FAISS = {f_bms:.1f} ms ({b_faster.upper()} {b_speedup:.2f}x faster)")
+        print("-" * 88)
+
+    print(f" {'nprobe':<8} | {'vecta QPS':<13} | {'FAISS QPS':<13} | {'vecta Rec@10':<14} | {'FAISS Rec@10':<14} | {'QPS Ratio':<14}")
+    print("-" * 88)
+
+    for row in sweep:
+        np_val = row["nprobe"]
+        v_qps = row["vecta_qps"]
+        f_qps = row["faiss_qps"]
+        v_rec = row["vecta_recall"] * 100.0
+        f_rec = row["faiss_recall"] * 100.0
+        ratio = row["qps_ratio"]
+        faster = "FAISS" if f_qps >= v_qps else "vecta"
+        ratio_str = f"{faster} {ratio:.2f}x" if faster == "FAISS" else f"{faster} {1.0/ratio:.2f}x"
+
+        print(
+            f" {np_val:<8} | "
+            f"{v_qps:>10.1f}  | "
+            f"{f_qps:>10.1f}  | "
+            f"{v_rec:>11.2f}%  | "
+            f"{f_rec:>11.2f}%  | "
+            f"{ratio_str:<14}"
+        )
+    print("=" * 88)
+
+    # Iso-recall analysis
+    if iso:
+        target_pct = iso["target_recall"] * 100.0
+        v_iso = iso["vecta"]
+        f_iso = iso["faiss"]
+        faster = iso["faster_engine"].upper()
+        speedup = iso["speedup_ratio"]
+
+        print(f" ISO-RECALL COMPARISON AT ~{target_pct:.0f}% ACCURACY TARGET:")
+        print(
+            f"  vecta reaches {v_iso['achieved_recall']*100:.1f}% recall at ~nprobe {v_iso['estimated_nprobe']:.1f} "
+            f"-> {v_iso['estimated_qps']:,.1f} QPS ({v_iso['method']})"
+        )
+        print(
+            f"  FAISS reaches {f_iso['achieved_recall']*100:.1f}% recall at ~nprobe {f_iso['estimated_nprobe']:.1f} "
+            f"-> {f_iso['estimated_qps']:,.1f} QPS ({f_iso['method']})"
+        )
+        print(
+            f"  Throughput comparison at matched ~{target_pct:.0f}% recall: {faster} is {speedup:.2f}x faster"
+        )
+        print("=" * 88)
+
+
+def compare_ivf_index(
+    dataset: Optional[Any] = None,
+    queries: Optional[Any] = None,
+    ground_truth: Optional[Any] = None,
+    k: int = 10,
+    nlist: int = 100,
+    nprobe_values: Optional[List[int]] = None,
+    dataset_name: str = "siftsmall",
+    metric: str = "euclidean",
+    threads: int = 1,
+    num_trials: int = 5,
+    warmup_trials: int = 2,
+    save_json: bool = True,
+    save_plot: bool = True,
+) -> Dict[str, Any]:
+    """
+    Execute full head-to-head comparison between vecta.IVFIndex and faiss.IndexIVFFlat
+    across a sweep of nprobe probe settings.
+
+    Evaluates:
+    - Train + add build time and ingestion throughput
+    - Query throughput (QPS) and recall@k across matching nprobe sweep values
+    - Iso-recall (~90%) interpolated throughput comparison
+    - Matplotlib Recall-vs-QPS tradeoff curve chart generation
+    """
+    set_faiss_threads(threads)
+    actual_threads = get_faiss_threads()
+
+    # 1. Dataset Acquisition
+    if dataset is None or queries is None or ground_truth is None:
+        print(f"\n[1/4] Loading {dataset_name} dataset...")
+        base, query, gt = load_siftsmall()
+    else:
+        base, query, gt = dataset, queries, ground_truth
+
+    base = np.ascontiguousarray(base, dtype=np.float32)
+    query = np.ascontiguousarray(query, dtype=np.float32)
+    num_base, dim = base.shape
+    num_query = query.shape[0]
+
+    if nprobe_values is None:
+        nprobe_values = [1, 2, 5, 10, 20, 50]
+
+    print(f"  Dataset: {num_base:,} base vectors (dim={dim}), {num_query:,} queries, k={k}")
+    print(f"  Configuration: nlist={nlist}, metric={metric}, nprobe_sweep={nprobe_values}")
+
+    # 2. Build Indexes (train then add)
+    print("\n[2/4] Building IVF indexes (train + add)...")
+    base_list = base.tolist()
+    ids = list(range(num_base))
+
+    # Build vecta.IVFIndex
+    t0 = time.perf_counter()
+    v_index = vecta.IVFIndex(dim, num_clusters=nlist, metric=metric)
+    v_index.train(base_list, k=nlist, max_iterations=25, seed=42)
+    v_index.add_batch(ids, base_list)
+    v_build_time = time.perf_counter() - t0
+    v_build_rate = num_base / v_build_time if v_build_time > 0 else 0.0
+    print(f"  vecta.IVFIndex:       {v_build_time * 1000.0:.2f} ms ({v_build_rate:,.1f} vec/s)")
+
+    # Build faiss.IndexIVFFlat
+    t0 = time.perf_counter()
+    f_index = build_faiss_ivf(dim, nlist=nlist, metric=metric)
+    f_index.train(base)
+    f_index.add(base)
+    f_build_time = time.perf_counter() - t0
+    f_build_rate = num_base / f_build_time if f_build_time > 0 else 0.0
+    print(f"  faiss.IndexIVFFlat:   {f_build_time * 1000.0:.2f} ms ({f_build_rate:,.1f} vec/s)")
+
+    # 3. Prepare queries
+    vecta_queries = query.tolist()
+    faiss_queries = [np.ascontiguousarray(query[i : i + 1]) for i in range(num_query)]
+    gt_list = gt.tolist() if isinstance(gt, np.ndarray) else gt
+
+    # 4. Sweep across nprobe values
+    print(f"\n[3/4] Running nprobe sweep across {nprobe_values} ({num_trials} trials, {warmup_trials} warmups)...")
+    sweep_results: List[Dict[str, Any]] = []
+
+    for np_val in nprobe_values:
+        # Vecta Search Trials at this nprobe
+        v_trials = run_trials(
+            lambda q, k_val: v_index.search(q, k=k_val, nprobe=np_val),
+            vecta_queries,
+            k,
+            num_trials=num_trials,
+            warmup_trials=warmup_trials,
+        )
+        v_stats = summarize_timings(v_trials, num_query)
+
+        # FAISS Search Trials at this nprobe
+        # Set nprobe via attribute on the FAISS index instance
+        f_index.nprobe = np_val
+        f_trials = run_trials(
+            lambda q, k_val: f_index.search(q, k=k_val),
+            faiss_queries,
+            k,
+            num_trials=num_trials,
+            warmup_trials=warmup_trials,
+        )
+        f_stats = summarize_timings(f_trials, num_query)
+
+        # Recall@k calculation against ground truth
+        v_preds = [[item[0] for item in v_index.search(q, k=k, nprobe=np_val)] for q in vecta_queries]
+        f_preds = [f_index.search(q, k=k)[1][0].tolist() for q in faiss_queries]
+
+        v_recall = recall_at_k(v_preds, gt_list, k=k)
+        f_recall = recall_at_k(f_preds, gt_list, k=k)
+
+        qps_ratio = f_stats["mean_qps"] / v_stats["mean_qps"] if v_stats["mean_qps"] > 0 else 1.0
+
+        sweep_entry = {
+            "nprobe": np_val,
+            "vecta_qps": v_stats["mean_qps"],
+            "faiss_qps": f_stats["mean_qps"],
+            "vecta_recall": v_recall,
+            "faiss_recall": f_recall,
+            "qps_ratio": qps_ratio,
+            "vecta_stats": v_stats,
+            "faiss_stats": f_stats,
+        }
+        sweep_results.append(sweep_entry)
+        print(f"  nprobe={np_val:<3} | vecta: {v_stats['mean_qps']:>8.1f} QPS (rec={v_recall*100:.1f}%) | "
+              f"faiss: {f_stats['mean_qps']:>8.1f} QPS (rec={f_recall*100:.1f}%)")
+
+    # 5. Iso-recall analysis (~90% target)
+    iso_analysis = find_iso_recall(sweep_results, target_recall=0.90)
+
+    results: Dict[str, Any] = {
+        "benchmark": "faiss_comparison_ivf",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "dataset": dataset_name,
+        "num_vectors": num_base,
+        "dimension": dim,
+        "num_queries": num_query,
+        "k": k,
+        "nlist": nlist,
+        "metric": metric,
+        "threads": actual_threads,
+        "num_trials": num_trials,
+        "warmup_trials": warmup_trials,
+        "vecta_build_time_sec": v_build_time,
+        "vecta_build_rate_vec_per_sec": v_build_rate,
+        "faiss_build_time_sec": f_build_time,
+        "faiss_build_rate_vec_per_sec": f_build_rate,
+        "sweep": sweep_results,
+        "iso_recall": iso_analysis,
+    }
+
+    # Print publication-ready comparison table
+    print_ivf_comparison_table(results)
+
+    # 6. Save JSON
+    if save_json:
+        json_path = save_benchmark_result("faiss_comparison_ivf", results)
+        results["json_path"] = json_path
+        print(f"\nRaw sweep data saved to: {json_path}")
+
+    # 7. Generate Plot
+    if save_plot:
+        plot_path = generate_ivf_plot(results)
+        results["chart_path"] = plot_path
+        if plot_path:
+            print(f"Recall-vs-QPS tradeoff curve chart saved to: {plot_path}")
+
+    return results
+
+
 def verify_side_by_side_instantiation(dim: int = 128) -> bool:
     """
     Verify that all four index types in both vecta and FAISS can be instantiated
@@ -416,6 +885,15 @@ def run_comparison_stub(
             threads=threads,
             save_json=False,
         )
+    elif index_type == "ivf":
+        return compare_ivf_index(
+            dataset_name=dataset,
+            k=k,
+            metric="euclidean",
+            threads=threads,
+            save_json=False,
+            save_plot=False,
+        )
     return None
 
 
@@ -444,6 +922,18 @@ def main():
         help="Number of nearest neighbors to retrieve (default: 10)",
     )
     parser.add_argument(
+        "--nlist",
+        type=int,
+        default=100,
+        help="Number of IVF coarse clusters (default: 100)",
+    )
+    parser.add_argument(
+        "--nprobe-sweep",
+        type=str,
+        default="1,2,5,10,20,50",
+        help="Comma-separated nprobe sweep values for IVF (default: 1,2,5,10,20,50)",
+    )
+    parser.add_argument(
         "--dataset",
         type=str,
         default="siftsmall",
@@ -467,6 +957,11 @@ def main():
         help="Do not save results to JSON",
     )
     parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Do not generate or save matplotlib plot",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Instantiate and validate configs without running benchmark loops",
@@ -485,6 +980,9 @@ def main():
         print("Dry-run requested: parameter validation and instantiation successful.")
         return
 
+    # Parse nprobe sweep
+    nprobe_values = [int(x.strip()) for x in args.nprobe_sweep.split(",") if x.strip()]
+
     # Run selected index comparison
     if args.index_type in ("flat", "all"):
         compare_flat_index(
@@ -497,12 +995,24 @@ def main():
             save_json=not args.no_save,
         )
 
+    if args.index_type in ("ivf", "all"):
+        compare_ivf_index(
+            k=args.k,
+            nlist=args.nlist,
+            nprobe_values=nprobe_values,
+            dataset_name=args.dataset,
+            metric="euclidean",
+            threads=args.threads,
+            num_trials=args.num_trials,
+            warmup_trials=args.warmup_trials,
+            save_json=not args.no_save,
+            save_plot=not args.no_plot,
+        )
+
     # Placeholders for future phases
-    if args.index_type in ("ivf", "all") and args.index_type != "flat":
-        print("\n[Phase 37] IVFIndex vs faiss.IndexIVFFlat scheduled for Phase 37.")
-    if args.index_type in ("hnsw", "all") and args.index_type != "flat":
+    if args.index_type in ("hnsw", "all") and args.index_type not in ("flat", "ivf"):
         print("\n[Phase 38] HnswIndex vs faiss.IndexHNSWFlat scheduled for Phase 38.")
-    if args.index_type in ("ivfpq", "all") and args.index_type != "flat":
+    if args.index_type in ("ivfpq", "all") and args.index_type not in ("flat", "ivf"):
         print("\n[Phase 39] IVFPQIndex vs faiss.IndexIVFPQ scheduled for Phase 39.")
 
 
