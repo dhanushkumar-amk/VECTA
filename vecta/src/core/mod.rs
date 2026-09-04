@@ -8,6 +8,7 @@ pub mod kmeans;
 pub mod metadata;
 pub mod pq;
 pub mod serialize;
+pub mod sharded_index;
 pub mod topk;
 pub mod vector;
 pub mod wal;
