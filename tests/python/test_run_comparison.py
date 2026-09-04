@@ -12,9 +12,10 @@ Covers:
 import math
 import os
 import time
-import faiss
 import numpy as np
 import pytest
+
+faiss = pytest.importorskip("faiss", reason="faiss is not installed")
 
 import vecta
 from benchmarks.faiss_comparison.faiss_wrappers import (

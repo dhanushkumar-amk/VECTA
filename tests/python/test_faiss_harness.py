@@ -13,7 +13,7 @@ import sys
 import numpy as np
 import pytest
 
-import faiss
+faiss = pytest.importorskip("faiss", reason="faiss is not installed")
 import vecta
 
 from benchmarks.faiss_comparison.config import (

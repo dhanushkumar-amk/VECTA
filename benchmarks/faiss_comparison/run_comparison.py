@@ -24,12 +24,11 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+import vecta
 try:
-    import vecta
     import faiss
-except ImportError as e:
-    print(f"Error importing required benchmark packages: {e}")
-    sys.exit(1)
+except ImportError:
+    faiss = None
 
 from benchmarks.datasets.download_sift1m import load_siftsmall
 from benchmarks.utils.recall import recall_at_k

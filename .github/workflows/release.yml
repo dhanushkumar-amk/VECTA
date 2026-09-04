@@ -35,7 +35,7 @@ jobs:
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
-          args: --release --out dist
+          args: --release --out dist -i python${{ matrix.python-version }}
           manylinux: auto
 
       - name: Upload wheel artifact
@@ -65,6 +65,8 @@ jobs:
 
       - name: Create release and upload assets
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: dist/*.whl
           generate_release_notes: true
