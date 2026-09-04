@@ -3,7 +3,9 @@
 //! This is the ONLY file in the crate allowed to import or use pyo3 types.
 //! It acts as a thin bridge between the Python world and the pure-Rust core engine.
 
-use pyo3::exceptions::PyValueError;
+use std::path::Path;
+
+use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 
 use rand::rngs::StdRng;
@@ -177,6 +179,16 @@ impl FlatIndex {
     /// Return vector dimensionality.
     pub fn dim(&self) -> usize {
         self.inner.dim()
+    }
+
+    /// Save the index to disk in the binary vecta format.
+    ///
+    /// # Errors
+    /// Raises [`PyIOError`] if writing or file creation fails.
+    pub fn save(&self, path: String) -> PyResult<()> {
+        crate::core::serialize::save_flat_index(&self.inner, Path::new(&path)).map_err(|e| {
+            PyIOError::new_err(format!("failed to save FlatIndex to '{}': {}", path, e))
+        })
     }
 }
 
@@ -379,6 +391,16 @@ impl IVFIndex {
 
         Ok(self.inner.nprobe_coverage(&query, nprobe))
     }
+
+    /// Save the index to disk in the binary vecta format.
+    ///
+    /// # Errors
+    /// Raises [`PyIOError`] if writing or file creation fails.
+    pub fn save(&self, path: String) -> PyResult<()> {
+        crate::core::serialize::save_ivf_index(&self.inner, Path::new(&path)).map_err(|e| {
+            PyIOError::new_err(format!("failed to save IVFIndex to '{}': {}", path, e))
+        })
+    }
 }
 
 /// Python wrapper around the pure-Rust [`HnswGraph`].
@@ -529,6 +551,17 @@ impl HnswIndex {
             *distribution.entry(node.max_layer).or_insert(0) += 1;
         }
         distribution
+    }
+
+    /// Save the index to disk in the binary vecta format.
+    ///
+    /// # Errors
+    /// Raises [`PyIOError`] if writing or file creation fails.
+    pub fn save(&self, path: String) -> PyResult<()> {
+        crate::core::serialize::save_hnsw_index(&self.inner, &self.config, Path::new(&path))
+            .map_err(|e| {
+                PyIOError::new_err(format!("failed to save HnswIndex to '{}': {}", path, e))
+            })
     }
 }
 
@@ -757,10 +790,84 @@ impl IVFPQIndex {
     pub fn memory_footprint_bytes(&self) -> usize {
         self.inner.memory_footprint_bytes()
     }
+
+    /// Save the index to disk in the binary vecta format.
+    ///
+    /// # Errors
+    /// Raises [`PyIOError`] if writing or file creation fails.
+    pub fn save(&self, path: String) -> PyResult<()> {
+        crate::core::serialize::save_ivf_pq_index(&self.inner, Path::new(&path)).map_err(|e| {
+            PyIOError::new_err(format!("failed to save IVFPQIndex to '{}': {}", path, e))
+        })
+    }
+}
+
+/// Load any saved vecta index from disk, automatically detecting its index type.
+///
+/// Returns a [`FlatIndex`], [`IVFIndex`], [`HnswIndex`], or [`IVFPQIndex`] instance.
+///
+/// # Errors
+/// Raises [`PyIOError`] if the file does not exist or I/O fails.
+/// Raises [`PyValueError`] if the file contains an invalid or corrupted index.
+#[pyfunction]
+pub fn load<'py>(py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err(PyIOError::new_err(format!("file not found: '{}'", path)));
+    }
+
+    let type_code = match crate::core::serialize::peek_index_type(p) {
+        Ok(code) => code,
+        Err(e) => {
+            if e.contains("failed to open file") || e.contains("failed to read") {
+                return Err(PyIOError::new_err(e));
+            } else {
+                return Err(PyValueError::new_err(e));
+            }
+        }
+    };
+
+    match type_code {
+        crate::core::serialize::INDEX_TYPE_FLAT => {
+            let inner =
+                crate::core::serialize::load_flat_index(p).map_err(PyValueError::new_err)?;
+            let obj = Bound::new(py, FlatIndex { inner })?;
+            Ok(obj.into_any())
+        }
+        crate::core::serialize::INDEX_TYPE_IVF => {
+            let inner = crate::core::serialize::load_ivf_index(p).map_err(PyValueError::new_err)?;
+            let obj = Bound::new(py, IVFIndex { inner })?;
+            Ok(obj.into_any())
+        }
+        crate::core::serialize::INDEX_TYPE_HNSW => {
+            let (inner, config) =
+                crate::core::serialize::load_hnsw_index(p).map_err(PyValueError::new_err)?;
+            let obj = Bound::new(
+                py,
+                HnswIndex {
+                    inner,
+                    config,
+                    rng: StdRng::seed_from_u64(42),
+                },
+            )?;
+            Ok(obj.into_any())
+        }
+        crate::core::serialize::INDEX_TYPE_IVF_PQ => {
+            let inner =
+                crate::core::serialize::load_ivf_pq_index(p).map_err(PyValueError::new_err)?;
+            let obj = Bound::new(py, IVFPQIndex { inner })?;
+            Ok(obj.into_any())
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unknown index type code {} in file '{}'",
+            other, path
+        ))),
+    }
 }
 
 /// Register all Python-exposed functions and classes onto the module.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello_vecta, m)?)?;
+    m.add_function(wrap_pyfunction!(load, m)?)?;
     Ok(())
 }

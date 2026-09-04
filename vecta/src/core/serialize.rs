@@ -72,6 +72,8 @@ use crate::core::hnsw::{HnswConfig, HnswGraph, HnswNode};
 use crate::core::ivf_index::IVFIndex;
 use crate::core::ivf_pq_index::IVFPQIndex;
 use crate::core::pq::{PQCodebooks, PQConfig};
+use crate::core::topk::{top_k_largest, top_k_smallest, ScoredId};
+use crate::core::vector::{cosine_similarity, dot_product, euclidean_distance};
 
 /// Magic identification bytes at the beginning of every vecta index file (`b"VCTA"`).
 pub const MAGIC_BYTES: &[u8; 4] = b"VCTA";
@@ -398,6 +400,197 @@ pub fn load_flat_index(path: &Path) -> Result<FlatIndex, String> {
     let index = FlatIndex::from_parts(batch, ids, header.metric)?;
 
     Ok(index)
+}
+
+// ============================================================================
+// MmapFlatIndex (Lazy Memory-Mapped Loading)
+// ============================================================================
+
+/// A memory-mapped, read-only view of a serialized [`FlatIndex`].
+///
+/// Unlike [`load_flat_index`] which reads the entire file into RAM upfront,
+/// `MmapFlatIndex` maps the file directly into virtual memory via the OS page cache.
+/// Only the 22-byte header is read at initialization; vector coordinate pages
+/// and ID pages are paged in lazily by the OS on-demand when accessed.
+pub struct MmapFlatIndex {
+    mmap: memmap2::Mmap,
+    ids_offset: usize,
+    vectors_offset: usize,
+    dim: usize,
+    num_vectors: usize,
+    metric: Metric,
+}
+
+impl MmapFlatIndex {
+    /// Return the number of vectors stored in the index.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.num_vectors
+    }
+
+    /// Return `true` if the index contains zero vectors.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.num_vectors == 0
+    }
+
+    /// Return the vector dimensionality.
+    #[inline]
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Return the distance/similarity metric.
+    #[inline]
+    pub fn metric(&self) -> Metric {
+        self.metric
+    }
+
+    /// Retrieve the external `u64` ID at internal index `internal_idx`.
+    ///
+    /// # Panics
+    /// Panics if `internal_idx >= self.len()`.
+    #[inline]
+    pub fn get_id(&self, internal_idx: usize) -> u64 {
+        assert!(
+            internal_idx < self.num_vectors,
+            "MmapFlatIndex::get_id: index {} out of bounds (len {})",
+            internal_idx,
+            self.num_vectors
+        );
+        let offset = self.ids_offset + internal_idx * 8;
+        let bytes: [u8; 8] = self.mmap[offset..offset + 8]
+            .try_into()
+            .expect("slice of length 8");
+        u64::from_le_bytes(bytes)
+    }
+
+    /// Retrieve a slice view of the vector coordinates at internal index `internal_idx`.
+    ///
+    /// # Panics
+    /// Panics if `internal_idx >= self.len()`.
+    ///
+    /// # Safety & Memory Design
+    /// The returned `&[f32]` directly references the memory-mapped virtual page:
+    /// 1. **Bounds**: Verified that `vectors_offset + internal_idx * dim * 4 + dim * 4 <= mmap.len()`.
+    /// 2. **Lifetime**: The slice lifetime is bound to `&self`, guaranteeing that the underlying
+    ///    `memmap2::Mmap` allocation remains mapped and immutable while the reference exists.
+    /// 3. **Bit Pattern Validity**: Every 4-byte chunk in the vector section represents an IEEE-754
+    ///    `f32`, for which every bit pattern is valid.
+    /// 4. **Hardware Alignment**: Modern x86_64 and AArch64 processors support unaligned float
+    ///    loads with negligible performance difference. The memory address is guaranteed valid.
+    #[inline]
+    pub fn get_vector(&self, internal_idx: usize) -> &[f32] {
+        assert!(
+            internal_idx < self.num_vectors,
+            "MmapFlatIndex::get_vector: index {} out of bounds (len {})",
+            internal_idx,
+            self.num_vectors
+        );
+        let start = self.vectors_offset + internal_idx * self.dim * 4;
+        let end = start + self.dim * 4;
+        assert!(
+            end <= self.mmap.len(),
+            "MmapFlatIndex::get_vector: vector byte range [{}..{}] exceeds mmap length {}",
+            start,
+            end,
+            self.mmap.len()
+        );
+
+        unsafe {
+            let ptr = self.mmap.as_ptr().add(start) as *const f32;
+            &*std::ptr::slice_from_raw_parts(ptr, self.dim)
+        }
+    }
+
+    /// Brute-force k-nearest-neighbor search across the memory-mapped vectors.
+    ///
+    /// Evaluates `query` against each vector lazily retrieved via [`MmapFlatIndex::get_vector`].
+    pub fn search(&self, query: &[f32], k: usize) -> Vec<ScoredId> {
+        assert_eq!(
+            query.len(),
+            self.dim,
+            "MmapFlatIndex::search: query dimension {} != index dimension {}",
+            query.len(),
+            self.dim
+        );
+
+        if k == 0 || self.is_empty() {
+            return Vec::new();
+        }
+
+        let mut candidates = Vec::with_capacity(self.num_vectors);
+        for i in 0..self.num_vectors {
+            let vec = self.get_vector(i);
+            let id = self.get_id(i);
+            let score = match self.metric {
+                Metric::Euclidean => euclidean_distance(query, vec),
+                Metric::Cosine => cosine_similarity(query, vec),
+                Metric::DotProduct => dot_product(query, vec),
+            };
+            candidates.push(ScoredId { id, score });
+        }
+
+        match self.metric {
+            Metric::Euclidean => top_k_smallest(&candidates, k),
+            Metric::Cosine | Metric::DotProduct => top_k_largest(&candidates, k),
+        }
+    }
+}
+
+/// Load a [`FlatIndex`] via memory mapping ([`MmapFlatIndex`]) without reading
+/// the entire file into RAM upfront.
+///
+/// Validates the 22-byte header, computes data offsets, and leaves vector data
+/// pages to be paged in lazily by the operating system upon access.
+///
+/// # Errors
+/// Returns an `Err(String)` if the file cannot be opened/mapped, is smaller than
+/// the 22-byte header, fails header validation, or is truncated.
+pub fn load_flat_index_mmap(path: &Path) -> Result<MmapFlatIndex, String> {
+    let file =
+        File::open(path).map_err(|e| format!("failed to open file {}: {}", path.display(), e))?;
+    let mmap = unsafe {
+        memmap2::Mmap::map(&file)
+            .map_err(|e| format!("failed to memory-map file {}: {}", path.display(), e))?
+    };
+
+    if mmap.len() < 22 {
+        return Err("file is smaller than 22-byte vecta header".to_string());
+    }
+
+    let mut header_slice = &mmap[..22];
+    let header = read_header(&mut header_slice, INDEX_TYPE_FLAT, "FlatIndex")?;
+
+    let ids_offset = 22;
+    let ids_size = header
+        .num_vectors
+        .checked_mul(8)
+        .ok_or_else(|| "IDs byte count overflows usize".to_string())?;
+    let vectors_offset = ids_offset + ids_size;
+    let vectors_size = header
+        .num_vectors
+        .checked_mul(header.dim)
+        .and_then(|v| v.checked_mul(4))
+        .ok_or_else(|| "vectors byte count overflows usize".to_string())?;
+    let expected_total_size = vectors_offset + vectors_size;
+
+    if mmap.len() < expected_total_size {
+        return Err(format!(
+            "truncated file: expected at least {} bytes, got {}",
+            expected_total_size,
+            mmap.len()
+        ));
+    }
+
+    Ok(MmapFlatIndex {
+        mmap,
+        ids_offset,
+        vectors_offset,
+        dim: header.dim,
+        num_vectors: header.num_vectors,
+        metric: header.metric,
+    })
 }
 
 // ============================================================================
@@ -1810,5 +2003,192 @@ mod tests {
         println!(
             "================================================================================"
         );
+    }
+
+    // ========================================================================
+    // Phase 27 Tests (MmapFlatIndex)
+    // ========================================================================
+
+    /// Mmap Test 5: Cross-format compatibility:
+    /// Load a file saved via save_flat_index using load_flat_index_mmap.
+    #[test]
+    fn test_mmap_flat_index_compatibility() {
+        let dim = 4;
+        let mut index = FlatIndex::new(dim, Metric::Euclidean);
+        index.add(10, &[1.0, 2.0, 3.0, 4.0]);
+        index.add(20, &[5.0, 6.0, 7.0, 8.0]);
+
+        let file_path = temp_file_path("test_mmap_compat");
+        save_flat_index(&index, &file_path).unwrap();
+
+        let mmap_index = load_flat_index_mmap(&file_path).unwrap();
+        let _ = std::fs::remove_file(&file_path);
+
+        assert_eq!(mmap_index.len(), 2);
+        assert_eq!(mmap_index.dim(), 4);
+        assert_eq!(mmap_index.metric(), Metric::Euclidean);
+        assert!(!mmap_index.is_empty());
+    }
+
+    /// Mmap Test 6: get_vector() and get_id() return IDENTICAL values to regular FlatIndex.
+    #[test]
+    fn test_mmap_flat_index_get_vector_and_get_id() {
+        let dim = 5;
+        let mut index = FlatIndex::new(dim, Metric::Cosine);
+
+        let vectors: Vec<(u64, [f32; 5])> = vec![
+            (100, [1.0, 0.5, 0.2, 0.0, 0.1]),
+            (200, [0.0, 1.0, 0.0, 0.5, 0.2]),
+            (300, [0.2, 0.3, 0.8, 0.1, 0.0]),
+            (400, [0.9, 0.1, 0.0, 0.0, 0.4]),
+        ];
+
+        for (id, vec) in &vectors {
+            index.add(*id, vec);
+        }
+
+        let file_path = temp_file_path("test_mmap_getters");
+        save_flat_index(&index, &file_path).unwrap();
+
+        let regular_loaded = load_flat_index(&file_path).unwrap();
+        let mmap_loaded = load_flat_index_mmap(&file_path).unwrap();
+        let _ = std::fs::remove_file(&file_path);
+
+        assert_eq!(mmap_loaded.len(), regular_loaded.len());
+
+        for i in 0..index.len() {
+            let mmap_id = mmap_loaded.get_id(i);
+            let regular_id = regular_loaded.ids[i];
+            assert_eq!(mmap_id, regular_id, "ID mismatch at index {}", i);
+
+            let mmap_vec = mmap_loaded.get_vector(i);
+            let regular_vec = regular_loaded.batch.get(i);
+            assert_eq!(mmap_vec, regular_vec, "Vector mismatch at index {}", i);
+        }
+    }
+
+    /// Mmap Test 7: search() via MmapFlatIndex returns IDENTICAL results to regular FlatIndex.
+    #[test]
+    fn test_mmap_flat_index_search_consistency() {
+        let dim = 4;
+        let mut index = FlatIndex::new(dim, Metric::Euclidean);
+
+        let vectors: Vec<(u64, [f32; 4])> = vec![
+            (1, [1.0, 0.0, 0.0, 0.0]),
+            (2, [0.0, 1.0, 0.0, 0.0]),
+            (3, [0.5, 0.5, 0.0, 0.0]),
+            (4, [0.0, 0.0, 1.0, 1.0]),
+            (5, [0.2, 0.8, 0.1, 0.0]),
+        ];
+
+        for (id, vec) in &vectors {
+            index.add(*id, vec);
+        }
+
+        let file_path = temp_file_path("test_mmap_search");
+        save_flat_index(&index, &file_path).unwrap();
+
+        let regular = load_flat_index(&file_path).unwrap();
+        let mmap_idx = load_flat_index_mmap(&file_path).unwrap();
+        let _ = std::fs::remove_file(&file_path);
+
+        let query = [0.1, 0.9, 0.0, 0.0];
+        let regular_results = regular.search(&query, 3);
+        let mmap_results = mmap_idx.search(&query, 3);
+
+        println!("\nPhase 27 Test 7: MmapFlatIndex vs FlatIndex Search Consistency:");
+        for i in 0..regular_results.len() {
+            println!(
+                "  Rank #{}: Regular=(id={}, score={:.6}) | Mmap=(id={}, score={:.6})",
+                i + 1,
+                regular_results[i].id,
+                regular_results[i].score,
+                mmap_results[i].id,
+                mmap_results[i].score
+            );
+        }
+
+        assert_eq!(regular_results.len(), mmap_results.len());
+        for i in 0..regular_results.len() {
+            assert_eq!(regular_results[i].id, mmap_results[i].id);
+            assert_eq!(regular_results[i].score, mmap_results[i].score);
+        }
+    }
+
+    /// Mmap Test 8: Realistic-scale test (50,000+ vectors):
+    /// Time regular load_flat_index() vs load_flat_index_mmap().
+    /// Print the timing comparison demonstrating instant open.
+    #[test]
+    fn test_mmap_realistic_scale_timing_comparison() {
+        let n = 50000;
+        let dim = 64;
+        let mut index = FlatIndex::new(dim, Metric::Euclidean);
+
+        let mut rng = StdRng::seed_from_u64(98765);
+        let mut ids = Vec::with_capacity(n);
+        let mut vectors = VectorBatch::new(dim);
+
+        for id in 0..n as u64 {
+            ids.push(id);
+            let mut v = Vec::with_capacity(dim);
+            for _ in 0..dim {
+                v.push(rng.gen_range(-1.0..1.0));
+            }
+            vectors.push(&v);
+        }
+        index.add_batch(&ids, &vectors);
+
+        let file_path = temp_file_path("test_mmap_50k");
+        save_flat_index(&index, &file_path).unwrap();
+
+        let file_size_mb = std::fs::metadata(&file_path).unwrap().len() as f64 / (1024.0 * 1024.0);
+
+        // 1. Time regular load (reads all 50k vectors into RAM)
+        let t0 = Instant::now();
+        let regular_loaded = load_flat_index(&file_path).unwrap();
+        let regular_load_dur = t0.elapsed();
+
+        // 2. Time mmap load (maps file, reads only 22-byte header)
+        let t1 = Instant::now();
+        let mmap_loaded = load_flat_index_mmap(&file_path).unwrap();
+        let mmap_load_dur = t1.elapsed();
+
+        let _ = std::fs::remove_file(&file_path);
+
+        assert_eq!(regular_loaded.len(), n);
+        assert_eq!(mmap_loaded.len(), n);
+
+        let speedup = regular_load_dur.as_secs_f64() / mmap_load_dur.as_secs_f64();
+
+        println!(
+            "\n================================================================================"
+        );
+        println!(
+            "Phase 27 Test 8: 50,000-Vector Load Benchmark (N={}, dim={}, File={:.2} MB)",
+            n, dim, file_size_mb
+        );
+        println!(
+            "================================================================================"
+        );
+        println!(
+            "  Regular load_flat_index() (Full RAM read):  {:.2?} ({:.1} MB/s)",
+            regular_load_dur,
+            file_size_mb / regular_load_dur.as_secs_f64()
+        );
+        println!(
+            "  Mmap load_flat_index_mmap() (Lazy zero-copy): {:.2?}",
+            mmap_load_dur
+        );
+        println!("  Mmap Open Speedup: {:.1}x faster", speedup);
+        println!(
+            "================================================================================"
+        );
+
+        // Spot check a query to confirm mmap search works on 50k
+        let query = vec![0.0f32; dim];
+        let reg_top1 = regular_loaded.search(&query, 1);
+        let mmap_top1 = mmap_loaded.search(&query, 1);
+        assert_eq!(reg_top1[0].id, mmap_top1[0].id);
+        assert_eq!(reg_top1[0].score, mmap_top1[0].score);
     }
 }
