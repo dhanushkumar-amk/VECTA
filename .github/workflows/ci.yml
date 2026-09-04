@@ -9,10 +9,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-defaults:
-  run:
-    working-directory: vecta
-
 jobs:
   # ─────────────────────────────────────────────────────
   # Job 1: Lint (fmt + clippy)
@@ -31,8 +27,6 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          work-dir: vecta
 
       - name: Check formatting
         run: cargo fmt --check
@@ -59,8 +53,6 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          work-dir: vecta
 
       - name: Run core tests (release mode)
         run: cargo test --release -- --nocapture
@@ -86,15 +78,13 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          work-dir: vecta
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: vecta/pyproject.toml
+          cache-dependency-path: pyproject.toml
 
       - name: Install Python dependencies
         run: pip install maturin pytest numpy
