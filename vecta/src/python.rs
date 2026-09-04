@@ -7,6 +7,7 @@ use std::path::Path;
 
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyBool, PyFloat, PyInt, PyString, PyTuple};
 
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -18,7 +19,11 @@ use crate::core::hnsw::{HnswConfig, HnswGraph};
 use crate::core::ivf_index::IVFIndex as CoreIVFIndex;
 use crate::core::ivf_pq_index::IVFPQIndex as CoreIVFPQIndex;
 use crate::core::kmeans::KMeansConfig;
+use crate::core::metadata::{
+    filtered_top_k as core_filtered_top_k, Filter, MetaValue, MetadataStore as CoreMetadataStore,
+};
 use crate::core::pq::PQConfig;
+use crate::core::topk::ScoredId;
 
 /// Placeholder function — confirms the extension module loads correctly.
 #[pyfunction]
@@ -865,9 +870,235 @@ pub fn load<'py>(py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
     }
 }
 
+// ============================================================================
+// Phase 30: MetadataStore and Filtered Search
+// ============================================================================
+
+/// Convert a Python value (int, float, str, bool) into an internal [`MetaValue`].
+///
+/// NOTE: In Python, `bool` is a subclass of `int` (`isinstance(True, int) == True`).
+/// Therefore, [`PyBool`] MUST be checked before [`PyInt`] to avoid converting booleans into integers.
+fn py_any_to_meta_value(val: &Bound<'_, PyAny>) -> PyResult<MetaValue> {
+    if let Ok(b) = val.cast::<PyBool>() {
+        Ok(MetaValue::Bool(b.is_true()))
+    } else if let Ok(i) = val.cast::<PyInt>() {
+        let int_val: i64 = i.extract()?;
+        Ok(MetaValue::Int(int_val))
+    } else if let Ok(f) = val.cast::<PyFloat>() {
+        let float_val: f64 = f.extract()?;
+        Ok(MetaValue::Float(float_val))
+    } else if let Ok(s) = val.cast::<PyString>() {
+        let str_val: String = s.extract()?;
+        Ok(MetaValue::Str(str_val))
+    } else {
+        Err(PyValueError::new_err(format!(
+            "unsupported metadata value type '{}': expected int, float, str, or bool",
+            val.get_type().name()?
+        )))
+    }
+}
+
+/// Recursively parse a Python filter expression into an internal [`Filter`] enum.
+///
+/// Mini-syntax using nested Python tuples:
+/// - `("eq", field_name, value)`
+/// - `("gt", field_name, value)`
+/// - `("lt", field_name, value)`
+/// - `("and", filter_a, filter_b)`
+/// - `("or", filter_a, filter_b)`
+/// - `("not", filter_a)`
+pub fn parse_filter(py_filter: &Bound<'_, PyAny>) -> PyResult<Filter> {
+    let tuple = py_filter.cast::<PyTuple>().map_err(|_| {
+        let type_name = py_filter
+            .get_type()
+            .name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        PyValueError::new_err(format!("filter must be a tuple, got '{}'", type_name))
+    })?;
+
+    if tuple.is_empty() {
+        return Err(PyValueError::new_err("filter tuple cannot be empty"));
+    }
+
+    let op_any = tuple.get_item(0)?;
+    let op_str: String = op_any.extract().map_err(|_| {
+        PyValueError::new_err("first element of filter tuple must be an operator string (e.g. 'eq', 'gt', 'lt', 'and', 'or', 'not')")
+    })?;
+
+    match op_str.to_ascii_lowercase().as_str() {
+        "eq" => {
+            if tuple.len() != 3 {
+                return Err(PyValueError::new_err(format!(
+                    "'eq' filter expects 3 elements ('eq', field_name, value), got {}",
+                    tuple.len()
+                )));
+            }
+            let field: String = tuple
+                .get_item(1)?
+                .extract()
+                .map_err(|_| PyValueError::new_err("field name in 'eq' filter must be a string"))?;
+            let val = py_any_to_meta_value(&tuple.get_item(2)?)?;
+            Ok(Filter::Eq(field, val))
+        }
+        "gt" => {
+            if tuple.len() != 3 {
+                return Err(PyValueError::new_err(format!(
+                    "'gt' filter expects 3 elements ('gt', field_name, value), got {}",
+                    tuple.len()
+                )));
+            }
+            let field: String = tuple
+                .get_item(1)?
+                .extract()
+                .map_err(|_| PyValueError::new_err("field name in 'gt' filter must be a string"))?;
+            let val = py_any_to_meta_value(&tuple.get_item(2)?)?;
+            Ok(Filter::Gt(field, val))
+        }
+        "lt" => {
+            if tuple.len() != 3 {
+                return Err(PyValueError::new_err(format!(
+                    "'lt' filter expects 3 elements ('lt', field_name, value), got {}",
+                    tuple.len()
+                )));
+            }
+            let field: String = tuple
+                .get_item(1)?
+                .extract()
+                .map_err(|_| PyValueError::new_err("field name in 'lt' filter must be a string"))?;
+            let val = py_any_to_meta_value(&tuple.get_item(2)?)?;
+            Ok(Filter::Lt(field, val))
+        }
+        "and" => {
+            if tuple.len() != 3 {
+                return Err(PyValueError::new_err(format!(
+                    "'and' filter expects 3 elements ('and', filter_a, filter_b), got {}",
+                    tuple.len()
+                )));
+            }
+            let left = parse_filter(&tuple.get_item(1)?)?;
+            let right = parse_filter(&tuple.get_item(2)?)?;
+            Ok(Filter::And(Box::new(left), Box::new(right)))
+        }
+        "or" => {
+            if tuple.len() != 3 {
+                return Err(PyValueError::new_err(format!(
+                    "'or' filter expects 3 elements ('or', filter_a, filter_b), got {}",
+                    tuple.len()
+                )));
+            }
+            let left = parse_filter(&tuple.get_item(1)?)?;
+            let right = parse_filter(&tuple.get_item(2)?)?;
+            Ok(Filter::Or(Box::new(left), Box::new(right)))
+        }
+        "not" => {
+            if tuple.len() != 2 {
+                return Err(PyValueError::new_err(format!(
+                    "'not' filter expects 2 elements ('not', filter_expr), got {}",
+                    tuple.len()
+                )));
+            }
+            let sub = parse_filter(&tuple.get_item(1)?)?;
+            Ok(Filter::Not(Box::new(sub)))
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unknown filter operator '{}': expected 'eq', 'gt', 'lt', 'and', 'or', or 'not'",
+            other
+        ))),
+    }
+}
+
+/// Python wrapper around the pure-Rust [`CoreMetadataStore`].
+///
+/// Stores arbitrary key-value metadata attributes keyed by vector external ID.
+#[pyclass]
+pub struct MetadataStore {
+    inner: CoreMetadataStore,
+}
+
+#[pymethods]
+impl MetadataStore {
+    /// Create a new empty metadata store.
+    #[new]
+    pub fn new() -> Self {
+        Self {
+            inner: CoreMetadataStore::new(),
+        }
+    }
+
+    /// Set a metadata attribute on a vector ID.
+    ///
+    /// Accepts int, float, str, or bool values.
+    /// Raises [`PyValueError`] for unsupported types.
+    pub fn set(&mut self, id: u64, field: String, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let meta_val = py_any_to_meta_value(value)?;
+        self.inner.set(id, &field, meta_val);
+        Ok(())
+    }
+
+    /// Retrieve a metadata attribute for a vector ID.
+    ///
+    /// Returns the native Python value (int, float, str, bool), or `None` if not found.
+    pub fn get(&self, py: Python<'_>, id: u64, field: String) -> PyResult<Option<Py<PyAny>>> {
+        match self.inner.get(id, &field) {
+            Some(MetaValue::Int(i)) => Ok(Some(i.into_pyobject(py)?.into_any().unbind())),
+            Some(MetaValue::Float(f)) => Ok(Some(f.into_pyobject(py)?.into_any().unbind())),
+            Some(MetaValue::Str(s)) => Ok(Some(s.into_pyobject(py)?.into_any().unbind())),
+            Some(MetaValue::Bool(b)) => {
+                Ok(Some(PyBool::new(py, *b).to_owned().into_any().unbind()))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Remove all metadata attributes associated with a vector ID.
+    pub fn remove(&mut self, id: u64) {
+        self.inner.remove(id);
+    }
+
+    /// Return the number of unique vector IDs stored in the metadata store.
+    pub fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Alias for `__len__`.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Return true if the metadata store contains no vectors.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+}
+
+/// Filter candidate search results against metadata constraints.
+///
+/// Implements the "over-fetch then filter" strategy. The caller executes an index
+/// search with `overfetch_k` candidates and passes the `(id, score)` results here,
+/// along with a [`MetadataStore`], a filter tuple expression, and target `k`.
+///
+/// Returns the first `k` matching candidates, preserving the index's ranking order.
+#[pyfunction]
+pub fn filtered_search(
+    results: Vec<(u64, f32)>,
+    store: &MetadataStore,
+    filter: &Bound<'_, PyAny>,
+    k: usize,
+) -> PyResult<Vec<(u64, f32)>> {
+    let parsed_filter = parse_filter(filter)?;
+    let candidates: Vec<ScoredId> = results
+        .into_iter()
+        .map(|(id, score)| ScoredId { id, score })
+        .collect();
+    let survivors = core_filtered_top_k(candidates, &store.inner, &parsed_filter, k);
+    Ok(survivors.into_iter().map(|s| (s.id, s.score)).collect())
+}
+
 /// Register all Python-exposed functions and classes onto the module.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello_vecta, m)?)?;
     m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(filtered_search, m)?)?;
     Ok(())
 }

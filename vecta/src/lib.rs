@@ -13,6 +13,7 @@ fn vecta(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<python::IVFIndex>()?;
     m.add_class::<python::HnswIndex>()?;
     m.add_class::<python::IVFPQIndex>()?;
+    m.add_class::<python::MetadataStore>()?;
     python::register(m)?;
     Ok(())
 }
