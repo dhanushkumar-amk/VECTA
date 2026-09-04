@@ -8,3 +8,4 @@ pub mod pq;
 pub mod serialize;
 pub mod topk;
 pub mod vector;
+pub mod wal;
