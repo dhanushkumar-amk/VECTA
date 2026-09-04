@@ -108,3 +108,39 @@ class TestPhase19:
         assert abs(results[0][1] - 0.0) < 1e-5
 
 
+class TestPhase24:
+    """Phase 24: IVFPQIndex Python bindings smoke tests."""
+
+    def test_ivf_pq_index_smoke(self):
+        """Basic creation, train, add, len, memory_footprint, and search smoke test."""
+        index = vecta.IVFPQIndex(dim=4, num_clusters=2, m=2, k_per_subvector=2)
+        assert len(index) == 0
+        assert index.is_empty()
+        assert not index.is_trained()
+
+        # Train
+        train_data = [
+            [1.0, 1.0, 1.0, 1.0],
+            [1.0, 2.0, 1.0, 2.0],
+            [9.0, 9.0, 9.0, 9.0],
+            [9.0, 8.0, 9.0, 8.0],
+        ]
+        index.train(train_data, ivf_seed=42, pq_seed=42)
+        assert index.is_trained()
+
+        # Add vectors
+        index.add(1, [1.0, 1.0, 1.0, 1.0])
+        index.add(2, [9.0, 9.0, 9.0, 9.0])
+        assert len(index) == 2
+        assert not index.is_empty()
+
+        # Check footprint
+        assert index.memory_footprint_bytes() > 0
+
+        # Search
+        results = index.search([1.0, 1.0, 1.0, 1.0], k=2, nprobe=2)
+        assert len(results) == 2
+        assert results[0][0] == 1
+
+
+

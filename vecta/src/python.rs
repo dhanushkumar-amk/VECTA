@@ -14,7 +14,9 @@ use crate::core::flat_index::{FlatIndex as CoreFlatIndex, Metric};
 use crate::core::hnsw::insert::insert as hnsw_insert;
 use crate::core::hnsw::{HnswConfig, HnswGraph};
 use crate::core::ivf_index::IVFIndex as CoreIVFIndex;
+use crate::core::ivf_pq_index::IVFPQIndex as CoreIVFPQIndex;
 use crate::core::kmeans::KMeansConfig;
+use crate::core::pq::PQConfig;
 
 /// Placeholder function — confirms the extension module loads correctly.
 #[pyfunction]
@@ -527,6 +529,233 @@ impl HnswIndex {
             *distribution.entry(node.max_layer).or_insert(0) += 1;
         }
         distribution
+    }
+}
+
+/// Python wrapper around [`CoreIVFPQIndex`].
+///
+/// Inverted File with Product Quantization (IndexIVFPQ).
+///
+/// Combines coarse Voronoi cell partitioning with Product Quantization compression:
+/// - Coarse quantizer: Centroids stored at full precision.
+/// - Inverted lists: Vectors stored as compact PQ codes.
+/// - Fine search: Evaluated using fast Asymmetric Distance Computation (ADC) lookup tables.
+///
+/// Note:
+///     IVFPQIndex operates exclusively with Euclidean distance for ADC fine search.
+///     There is no `metric` parameter for this index type in v1.
+#[pyclass]
+pub struct IVFPQIndex {
+    inner: CoreIVFPQIndex,
+}
+
+#[pymethods]
+impl IVFPQIndex {
+    /// Create a new IVFPQIndex.
+    ///
+    /// Args:
+    ///     dim: Dimensionality of vectors. Must be evenly divisible by `m`.
+    ///     num_clusters: Number of coarse Voronoi clusters (inverted lists).
+    ///     m: Number of subquantizers (subvectors).
+    ///     k_per_subvector: Centroids per subquantizer codebook (default 256 for 1 byte/subvector).
+    ///     max_iterations: Maximum Lloyd k-means iterations for PQ codebook training (default 100).
+    ///
+    /// Note:
+    ///     IVFPQIndex operates exclusively with Euclidean distance for ADC fine search.
+    ///     There is no `metric` parameter for this index type in v1.
+    #[new]
+    #[pyo3(signature = (dim, num_clusters, m, k_per_subvector=256, max_iterations=100))]
+    pub fn new(
+        dim: usize,
+        num_clusters: usize,
+        m: usize,
+        k_per_subvector: usize,
+        max_iterations: usize,
+    ) -> PyResult<Self> {
+        let pq_config = PQConfig {
+            m,
+            k_per_subvector,
+            max_iterations,
+        };
+
+        let inner = CoreIVFPQIndex::new(dim, num_clusters, pq_config)
+            .map_err(PyValueError::new_err)?;
+
+        Ok(Self { inner })
+    }
+
+    /// Train both coarse cluster centroids and PQ codebooks.
+    ///
+    /// Args:
+    ///     training_data: List of vectors to train coarse and PQ quantizers.
+    ///     ivf_seed: Random seed for coarse k-means clustering (default: 42).
+    ///     pq_seed: Random seed for subquantizer k-means clustering (default: 42).
+    #[pyo3(signature = (training_data, ivf_seed=42, pq_seed=42))]
+    pub fn train(
+        &mut self,
+        training_data: Vec<Vec<f32>>,
+        ivf_seed: u64,
+        pq_seed: u64,
+    ) -> PyResult<()> {
+        if training_data.is_empty() {
+            return Err(PyValueError::new_err("training_data cannot be empty"));
+        }
+
+        let dim = self.inner.dim();
+        for (i, v) in training_data.iter().enumerate() {
+            if v.len() != dim {
+                return Err(PyValueError::new_err(format!(
+                    "training vector at index {} has dimension {}, expected {}",
+                    i,
+                    v.len(),
+                    dim
+                )));
+            }
+        }
+
+        if training_data.len() < self.inner.num_clusters() {
+            return Err(PyValueError::new_err(format!(
+                "insufficient training vectors ({}) for num_clusters={}",
+                training_data.len(),
+                self.inner.num_clusters()
+            )));
+        }
+
+        let mut batch = VectorBatch::new(dim);
+        for v in &training_data {
+            batch.push(v);
+        }
+
+        let km_config = KMeansConfig {
+            k: self.inner.num_clusters(),
+            max_iterations: 100,
+            tolerance: 1e-4,
+        };
+
+        self.inner
+            .train(&batch, &km_config, ivf_seed, pq_seed)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Add a single vector with an external ID into the index.
+    pub fn add(&mut self, id: u64, vector: Vec<f32>) -> PyResult<()> {
+        if !self.inner.is_trained() {
+            return Err(PyValueError::new_err(
+                "IVFPQIndex must be trained before adding vectors",
+            ));
+        }
+        if vector.len() != self.inner.dim() {
+            return Err(PyValueError::new_err(format!(
+                "vector dimension mismatch: expected {}, got {}",
+                self.inner.dim(),
+                vector.len()
+            )));
+        }
+
+        self.inner.add(id, &vector).map_err(PyValueError::new_err)
+    }
+
+    /// Bulk-add vectors with external IDs into the index.
+    pub fn add_batch(&mut self, ids: Vec<u64>, vectors: Vec<Vec<f32>>) -> PyResult<()> {
+        if !self.inner.is_trained() {
+            return Err(PyValueError::new_err(
+                "IVFPQIndex must be trained before adding vectors",
+            ));
+        }
+        if ids.len() != vectors.len() {
+            return Err(PyValueError::new_err(format!(
+                "ids count ({}) != vectors count ({})",
+                ids.len(),
+                vectors.len()
+            )));
+        }
+
+        let dim = self.inner.dim();
+        for (i, v) in vectors.iter().enumerate() {
+            if v.len() != dim {
+                return Err(PyValueError::new_err(format!(
+                    "vector at index {} has dimension {}, expected {}",
+                    i,
+                    v.len(),
+                    dim
+                )));
+            }
+        }
+
+        let mut batch = VectorBatch::new(dim);
+        for v in &vectors {
+            batch.push(v);
+        }
+
+        self.inner
+            .add_batch(&ids, &batch)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Search for top-`k` nearest neighbors probing `nprobe` centroids using ADC.
+    ///
+    /// Returns:
+    ///     List of (id, score) tuples, where score is the approximate squared Euclidean distance.
+    #[pyo3(signature = (query, k, nprobe=1))]
+    pub fn search(&self, query: Vec<f32>, k: usize, nprobe: usize) -> PyResult<Vec<(u64, f32)>> {
+        if !self.inner.is_trained() {
+            return Err(PyValueError::new_err(
+                "IVFPQIndex must be trained before searching",
+            ));
+        }
+        if query.len() != self.inner.dim() {
+            return Err(PyValueError::new_err(format!(
+                "query dimension mismatch: expected {}, got {}",
+                self.inner.dim(),
+                query.len()
+            )));
+        }
+
+        if k == 0 || self.inner.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let scored = self
+            .inner
+            .search(&query, k, nprobe)
+            .map_err(PyValueError::new_err)?;
+
+        Ok(scored.into_iter().map(|s| (s.id, s.score)).collect())
+    }
+
+    /// Return the number of vectors stored in the index (`len(index)`).
+    pub fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Alias for `__len__`.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Return `true` if index contains no vectors.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Return `true` if index centroids and PQ codebooks have been trained.
+    pub fn is_trained(&self) -> bool {
+        self.inner.is_trained()
+    }
+
+    /// Return vector dimensionality.
+    pub fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    /// Return number of coarse clusters.
+    pub fn num_clusters(&self) -> usize {
+        self.inner.num_clusters()
+    }
+
+    /// Return total memory footprint in bytes.
+    pub fn memory_footprint_bytes(&self) -> usize {
+        self.inner.memory_footprint_bytes()
     }
 }
 
