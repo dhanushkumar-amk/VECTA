@@ -41,6 +41,22 @@ impl FlatIndex {
         }
     }
 
+    /// Construct a FlatIndex directly from pre-built components without re-validating uniqueness.
+    ///
+    /// # Safety / Consistency
+    /// Used during index deserialization where vector and ID consistency has already been verified
+    /// prior to serialization.
+    pub fn from_parts(batch: VectorBatch, ids: Vec<u64>, metric: Metric) -> Result<Self, String> {
+        if batch.len() != ids.len() {
+            return Err(format!(
+                "FlatIndex::from_parts: batch length ({}) != ids length ({})",
+                batch.len(),
+                ids.len()
+            ));
+        }
+        Ok(Self { batch, ids, metric })
+    }
+
     /// Insert a single vector with its external ID.
     ///
     /// # Panics

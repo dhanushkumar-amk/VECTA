@@ -578,8 +578,8 @@ impl IVFPQIndex {
             max_iterations,
         };
 
-        let inner = CoreIVFPQIndex::new(dim, num_clusters, pq_config)
-            .map_err(PyValueError::new_err)?;
+        let inner =
+            CoreIVFPQIndex::new(dim, num_clusters, pq_config).map_err(PyValueError::new_err)?;
 
         Ok(Self { inner })
     }

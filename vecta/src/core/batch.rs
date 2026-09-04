@@ -40,6 +40,25 @@ impl VectorBatch {
         }
     }
 
+    /// Construct a VectorBatch directly from raw float data.
+    ///
+    /// Validates that `data.len() == dim * num_vectors`.
+    pub fn from_parts(data: Vec<f32>, dim: usize, num_vectors: usize) -> Result<Self, String> {
+        if data.len() != dim * num_vectors {
+            return Err(format!(
+                "VectorBatch::from_parts: data length ({}) != dim ({}) * num_vectors ({})",
+                data.len(),
+                dim,
+                num_vectors
+            ));
+        }
+        Ok(Self {
+            data,
+            dim,
+            num_vectors,
+        })
+    }
+
     /// Number of vectors stored in the batch.
     #[inline]
     pub fn len(&self) -> usize {

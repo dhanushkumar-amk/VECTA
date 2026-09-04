@@ -5,5 +5,6 @@ pub mod ivf_index;
 pub mod ivf_pq_index;
 pub mod kmeans;
 pub mod pq;
+pub mod serialize;
 pub mod topk;
 pub mod vector;
