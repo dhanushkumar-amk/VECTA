@@ -2,6 +2,7 @@ pub mod batch;
 pub mod flat_index;
 pub mod hnsw;
 pub mod ivf_index;
+pub mod ivf_pq_index;
 pub mod kmeans;
 pub mod pq;
 pub mod topk;

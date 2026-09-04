@@ -37,6 +37,79 @@ pub struct IVFIndex {
     pub is_trained: bool,
 }
 
+/// Find the index of the closest centroid to `vector` under Euclidean distance.
+///
+/// Shared helper used across [`IVFIndex`] and `IVFPQIndex`.
+///
+/// # Panics
+/// - If `centroids.is_empty()`.
+/// - If `vector.len() != centroids.dim`.
+pub fn find_nearest_centroid(centroids: &VectorBatch, vector: &[f32]) -> usize {
+    assert!(
+        !centroids.is_empty(),
+        "find_nearest_centroid: centroids cannot be empty"
+    );
+    assert_eq!(
+        vector.len(),
+        centroids.dim,
+        "find_nearest_centroid: expected dim {}, got {}",
+        centroids.dim,
+        vector.len()
+    );
+
+    let mut best_idx = 0;
+    let mut min_dist = f32::INFINITY;
+
+    for c in 0..centroids.len() {
+        let dist = euclidean_distance(vector, centroids.get(c));
+        if dist < min_dist {
+            min_dist = dist;
+            best_idx = c;
+        }
+    }
+
+    best_idx
+}
+
+/// Coarse search: compare query against all centroids to select the `nprobe` nearest clusters.
+///
+/// Shared helper used across [`IVFIndex`] and `IVFPQIndex`.
+///
+/// # Panics
+/// - If `query.len() != centroids.dim`.
+pub fn find_nearest_clusters(centroids: &VectorBatch, query: &[f32], nprobe: usize) -> Vec<usize> {
+    assert_eq!(
+        query.len(),
+        centroids.dim,
+        "find_nearest_clusters: query dimension {} != centroids dimension {}",
+        query.len(),
+        centroids.dim
+    );
+
+    if nprobe == 0 || centroids.is_empty() {
+        return Vec::new();
+    }
+
+    let k = nprobe.min(centroids.len());
+
+    // Compute Euclidean distance from query to every centroid in parallel using Phase 3 batch engine
+    let dists = batch_euclidean_distance(query, centroids);
+
+    // Map distances to candidate ScoredIds with centroid index
+    let candidates: Vec<ScoredId> = dists
+        .into_iter()
+        .enumerate()
+        .map(|(idx, dist)| ScoredId {
+            id: idx as u64,
+            score: dist,
+        })
+        .collect();
+
+    // Select the k nearest centroids, sorted ascending (nearest-first)
+    let top_clusters = top_k_smallest(&candidates, k);
+    top_clusters.into_iter().map(|s| s.id as usize).collect()
+}
+
 impl IVFIndex {
     /// Create a new, untrained IVF index with `num_clusters` empty inverted lists.
     ///
@@ -151,18 +224,7 @@ impl IVFIndex {
             vector.len()
         );
 
-        let mut best_idx = 0;
-        let mut min_dist = f32::INFINITY;
-
-        for c in 0..self.centroids.len() {
-            let dist = euclidean_distance(vector, self.centroids.get(c));
-            if dist < min_dist {
-                min_dist = dist;
-                best_idx = c;
-            }
-        }
-
-        best_idx
+        find_nearest_centroid(&self.centroids, vector)
     }
 
     /// Insert a single vector with its external ID into the index.
@@ -259,28 +321,7 @@ impl IVFIndex {
             self.dim
         );
 
-        if nprobe == 0 || self.centroids.is_empty() {
-            return Vec::new();
-        }
-
-        let k = nprobe.min(self.centroids.len());
-
-        // Compute Euclidean distance from query to every centroid in parallel using Phase 3 batch engine
-        let dists = batch_euclidean_distance(query, &self.centroids);
-
-        // Map distances to candidate ScoredIds with centroid index
-        let candidates: Vec<ScoredId> = dists
-            .into_iter()
-            .enumerate()
-            .map(|(idx, dist)| ScoredId {
-                id: idx as u64,
-                score: dist,
-            })
-            .collect();
-
-        // Select the k nearest centroids, sorted ascending (nearest-first)
-        let top_clusters = top_k_smallest(&candidates, k);
-        top_clusters.into_iter().map(|s| s.id as usize).collect()
+        find_nearest_clusters(&self.centroids, query, nprobe)
     }
 
     /// Return the total number of vectors across the `nprobe` nearest clusters to `query`.
