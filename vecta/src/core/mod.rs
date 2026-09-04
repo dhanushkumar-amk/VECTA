@@ -4,6 +4,7 @@ pub mod hnsw;
 pub mod ivf_index;
 pub mod ivf_pq_index;
 pub mod kmeans;
+pub mod metadata;
 pub mod pq;
 pub mod serialize;
 pub mod topk;
