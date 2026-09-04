@@ -21,3 +21,4 @@ benchmarks/datasets/*.tar.gz
 benchmarks/datasets/*.tgz
 benchmarks/datasets/siftsmall/
 benchmarks/results/*.json
+benchmarks/results/*.png

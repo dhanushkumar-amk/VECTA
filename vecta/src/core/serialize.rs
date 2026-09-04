@@ -298,7 +298,7 @@ pub fn read_floats<R: Read>(reader: &mut R, total_floats: usize) -> Result<Vec<f
     Ok(data)
 }
 
-/// Peek at the header of a vecta index file to determine its [`index_type`]
+/// Peek at the header of a vecta index file to determine its index type
 /// without reading the rest of the index.
 ///
 /// # Returns

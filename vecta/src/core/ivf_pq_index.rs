@@ -262,7 +262,7 @@ impl IVFPQIndex {
     ///
     /// # Search Lifecycle:
     /// 1. **Coarse Search**: Selects `nprobe` nearest coarse centroids via [`find_nearest_clusters`].
-    /// 2. **ADC Table Construction**: Computes ONE [`ADCLookupTable`] for `query` across all codebooks.
+    /// 2. **ADC Table Construction**: Computes ONE `ADCLookupTable` for `query` across all codebooks.
     ///    Built once per query and reused across all probed inverted lists.
     /// 3. **Fine ADC Scoring**: For each `(id, code)` in selected inverted lists, computes
     ///    `adc_distance(&table, code)` via $m$ table lookups and additions.

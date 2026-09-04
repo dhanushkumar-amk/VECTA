@@ -7,7 +7,7 @@
 //! - [`MetadataStore`]: An in-memory store mapping vector IDs to key-value metadata attributes.
 //! - [`Filter`]: Composable filter expressions ([`Filter::Eq`], [`Filter::Gt`], [`Filter::Lt`],
 //!   [`Filter::And`], [`Filter::Or`], [`Filter::Not`]).
-//! - [`matches`]: Recursive boolean evaluation of filter expressions against an ID's metadata.
+//! - [`matches()`]: Recursive boolean evaluation of filter expressions against an ID's metadata.
 //! - [`filtered_top_k`]: Post-filtering pipeline operating on `Vec<ScoredId>` from any index search.
 //!
 //! # Separation of Concerns
@@ -198,7 +198,7 @@ pub fn matches(store: &MetadataStore, id: u64, filter: &Filter) -> bool {
 ///
 /// Implements the "over-fetch then filter" pattern:
 /// 1. The caller queries an index with `overfetch_k > k` candidates.
-/// 2. Candidates are filtered against `store` using [`matches`].
+/// 2. Candidates are filtered against `store` using [`matches()`].
 /// 3. The first `k` surviving candidates are returned, maintaining the index's original similarity ranking.
 ///
 /// # Honest Limitation: Fewer Than `k` Results

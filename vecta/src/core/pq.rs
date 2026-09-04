@@ -285,7 +285,7 @@ pub struct ADCLookupTable {
 /// Precompute an Asymmetric Distance Computation (ADC) lookup table for a full-precision query.
 ///
 /// For each subvector position `i` in `0..m`, extracts the query's subvector slice using
-/// [`subvector_slice`] and computes squared Euclidean distance to each centroid `j` in codebook `i`.
+/// `subvector_slice` and computes squared Euclidean distance to each centroid `j` in codebook `i`.
 ///
 /// # Mathematical Note:
 /// We compute **squared Euclidean distance**, NOT the square-rooted version. By orthogonality

@@ -216,7 +216,7 @@ impl FlatIndex {
         }
     }
 
-    /// Run [`search`] once per query row in the given [`VectorBatch`].
+    /// Run [`Self::search`] once per query row in the given [`VectorBatch`].
     ///
     /// Returns one `Vec<ScoredId>` per query, in order. Each individual
     /// query runs single-threaded — parallelism across queries is a later

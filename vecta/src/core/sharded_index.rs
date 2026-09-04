@@ -18,7 +18,7 @@
 //!
 //! # Per-Shard Storage: Why `ConcurrentFlatIndex`?
 //!
-//! Rather than wrapping plain [`FlatIndex`] shards, each shard in [`ShardedFlatIndex`] is an independent
+//! Rather than wrapping plain [`crate::core::flat_index::FlatIndex`] shards, each shard in [`ShardedFlatIndex`] is an independent
 //! [`ConcurrentFlatIndex`]:
 //! - **Fine-Grained Concurrency**: Each shard manages its own `RwLock`. An insert targeting Shard 0 only
 //!   locks Shard 0's write lock. Shards 1..N remain completely unlocked, freely serving concurrent searches
