@@ -1,9 +1,0 @@
-# Configure macOS linker to allow dynamic lookup of Python symbols during `cargo test`.
-# PyO3 extension modules do not link libpython directly, so macOS ld requires dynamic lookup
-# for standalone test binaries to succeed.
-
-[target.x86_64-apple-darwin]
-rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
-
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
