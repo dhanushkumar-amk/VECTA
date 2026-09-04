@@ -143,4 +143,32 @@ class TestPhase24:
         assert results[0][0] == 1
 
 
+class TestPhase34:
+    """Phase 34: ShardedFlatIndex Python bindings smoke tests."""
 
+    def test_sharded_flat_index_smoke(self):
+        """Basic creation, add, add_batch, len, shard_sizes, and search smoke test."""
+        index = vecta.ShardedFlatIndex(dim=3, num_shards=2, metric="euclidean")
+        assert len(index) == 0
+        assert index.is_empty()
+        assert index.num_shards() == 2
+        assert index.dim() == 3
+        assert index.metric() == "euclidean"
+
+        index.add(1, [1.0, 0.0, 0.0])
+        index.add_batch([2, 3], [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        assert len(index) == 3
+        assert not index.is_empty()
+        assert sum(index.shard_sizes()) == 3
+
+        # Sequential search
+        seq_res = index.search([1.0, 0.0, 0.0], k=1, parallel=False)
+        assert len(seq_res) == 1
+        assert seq_res[0][0] == 1
+        assert abs(seq_res[0][1] - 0.0) < 1e-5
+
+        # Parallel search
+        par_res = index.search([1.0, 0.0, 0.0], k=1, parallel=True)
+        assert len(par_res) == 1
+        assert par_res[0][0] == 1
+        assert abs(par_res[0][1] - 0.0) < 1e-5

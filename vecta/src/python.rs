@@ -25,6 +25,7 @@ use crate::core::metadata::{
     filtered_top_k as core_filtered_top_k, Filter, MetaValue, MetadataStore as CoreMetadataStore,
 };
 use crate::core::pq::PQConfig;
+use crate::core::sharded_index::ShardedFlatIndex as CoreShardedFlatIndex;
 use crate::core::topk::ScoredId;
 
 /// Placeholder function — confirms the extension module loads correctly.
@@ -315,6 +316,169 @@ impl ConcurrentFlatIndex {
     /// Return vector dimensionality.
     pub fn dim(&self) -> usize {
         self.inner.dim()
+    }
+}
+
+// ============================================================================
+// Phase 34: ShardedFlatIndex with Parallel Fan-Out and GIL Release
+// ============================================================================
+
+/// In-process sharded vector index with fan-out/merge query coordination.
+///
+/// Partitions vectors across `num_shards` independent [`CoreConcurrentFlatIndex`] shards
+/// using deterministic hash-based routing. Supports both sequential and multi-core
+/// parallel query fan-out with full Python GIL release.
+#[pyclass]
+pub struct ShardedFlatIndex {
+    inner: Arc<CoreShardedFlatIndex>,
+}
+
+#[pymethods]
+impl ShardedFlatIndex {
+    /// Create a new sharded flat index with `num_shards` independent shards.
+    ///
+    /// Supported metrics:
+    /// - `"euclidean"` or `"l2"`
+    /// - `"cosine"` or `"cos"`
+    /// - `"dot_product"`, `"dot"`, or `"ip"`
+    #[new]
+    pub fn new(dim: usize, num_shards: usize, metric: &str) -> PyResult<Self> {
+        if dim == 0 {
+            return Err(PyValueError::new_err("dimension must be greater than 0"));
+        }
+        if num_shards == 0 {
+            return Err(PyValueError::new_err("num_shards must be greater than 0"));
+        }
+
+        let rust_metric = parse_metric(metric)?;
+
+        Ok(Self {
+            inner: Arc::new(CoreShardedFlatIndex::new(dim, num_shards, rust_metric)),
+        })
+    }
+
+    /// Add a single vector with an external ID into the appropriate shard.
+    ///
+    /// The target shard is deterministically routed via hash modulo. Releases the GIL
+    /// while acquiring the destination shard's write lock.
+    pub fn add(&self, py: Python<'_>, id: u64, vector: Vec<f32>) -> PyResult<()> {
+        if vector.len() != self.inner.dim() {
+            return Err(PyValueError::new_err(format!(
+                "vector dimension mismatch: expected {}, got {}",
+                self.inner.dim(),
+                vector.len()
+            )));
+        }
+
+        py.detach(|| self.inner.add(id, &vector))
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Bulk-add vectors and external IDs partitioned across all shards.
+    ///
+    /// Partitions the input vectors into per-shard buckets in a single pass and executes
+    /// bulk insert once per target shard, preserving batch deduplication and flat buffer allocation.
+    pub fn add_batch(&self, py: Python<'_>, ids: Vec<u64>, vectors: Vec<Vec<f32>>) -> PyResult<()> {
+        if ids.len() != vectors.len() {
+            return Err(PyValueError::new_err(format!(
+                "ids count ({}) != vectors count ({})",
+                ids.len(),
+                vectors.len()
+            )));
+        }
+
+        let dim = self.inner.dim();
+        for (i, v) in vectors.iter().enumerate() {
+            if v.len() != dim {
+                return Err(PyValueError::new_err(format!(
+                    "vector at index {} has dimension {}, expected {}",
+                    i,
+                    v.len(),
+                    dim
+                )));
+            }
+        }
+
+        let mut batch = VectorBatch::new(dim);
+        for v in &vectors {
+            batch.push(v);
+        }
+
+        py.detach(|| self.inner.add_batch(&ids, &batch))
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Search for top-`k` nearest neighbors across all shards.
+    ///
+    /// Fans queries out to all shards, gathers local top-`k` candidates, and merges
+    /// them into a global top-`k` ranking.
+    ///
+    /// If `parallel=True`, queries are executed concurrently across shards using scoped OS threads.
+    /// Always releases the GIL via `py.detach` so other Python threads can execute concurrently.
+    #[pyo3(signature = (query, k, parallel = false))]
+    pub fn search(
+        &self,
+        py: Python<'_>,
+        query: Vec<f32>,
+        k: usize,
+        parallel: bool,
+    ) -> PyResult<Vec<(u64, f32)>> {
+        if query.len() != self.inner.dim() {
+            return Err(PyValueError::new_err(format!(
+                "query dimension mismatch: expected {}, got {}",
+                self.inner.dim(),
+                query.len()
+            )));
+        }
+
+        let scored = py.detach(|| {
+            if parallel {
+                self.inner.search_parallel(&query, k)
+            } else {
+                self.inner.search(&query, k)
+            }
+        });
+
+        Ok(scored.into_iter().map(|s| (s.id, s.score)).collect())
+    }
+
+    /// Return the total number of vectors stored across all shards (`len(index)`).
+    pub fn __len__(&self, py: Python<'_>) -> usize {
+        py.detach(|| self.inner.len())
+    }
+
+    /// Alias for `__len__`.
+    pub fn len(&self, py: Python<'_>) -> usize {
+        self.__len__(py)
+    }
+
+    /// Return true if the index contains no vectors.
+    pub fn is_empty(&self, py: Python<'_>) -> bool {
+        self.__len__(py) == 0
+    }
+
+    /// Return the number of vectors stored in each individual shard.
+    pub fn shard_sizes(&self, py: Python<'_>) -> Vec<usize> {
+        py.detach(|| self.inner.shard_sizes())
+    }
+
+    /// Return vector dimensionality.
+    pub fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    /// Return the number of shards.
+    pub fn num_shards(&self) -> usize {
+        self.inner.num_shards()
+    }
+
+    /// Return the metric used by the index.
+    pub fn metric(&self) -> &str {
+        match self.inner.metric() {
+            Metric::Euclidean => "euclidean",
+            Metric::Cosine => "cosine",
+            Metric::DotProduct => "dot_product",
+        }
     }
 }
 
