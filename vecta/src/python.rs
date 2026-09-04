@@ -4,6 +4,7 @@
 //! It acts as a thin bridge between the Python world and the pure-Rust core engine.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
@@ -13,6 +14,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use crate::core::batch::VectorBatch;
+use crate::core::concurrent_index::ConcurrentFlatIndex as CoreConcurrentFlatIndex;
 use crate::core::flat_index::{FlatIndex as CoreFlatIndex, Metric};
 use crate::core::hnsw::insert::insert as hnsw_insert;
 use crate::core::hnsw::{HnswConfig, HnswGraph};
@@ -194,6 +196,125 @@ impl FlatIndex {
         crate::core::serialize::save_flat_index(&self.inner, Path::new(&path)).map_err(|e| {
             PyIOError::new_err(format!("failed to save FlatIndex to '{}': {}", path, e))
         })
+    }
+}
+
+// ============================================================================
+// Phase 32: ConcurrentFlatIndex with GIL Release
+// ============================================================================
+
+/// Thread-safe concurrent flat index for multi-threaded Python applications.
+///
+/// Wraps an internal [`Arc<CoreConcurrentFlatIndex>`] and releases Python's Global Interpreter Lock (GIL)
+/// during search, insert, and batch operations via [`Python::allow_threads`]. This allows true multi-core
+/// parallelism when queried from multiple Python `threading.Thread` instances.
+#[pyclass]
+pub struct ConcurrentFlatIndex {
+    inner: Arc<CoreConcurrentFlatIndex>,
+}
+
+#[pymethods]
+impl ConcurrentFlatIndex {
+    /// Create a new thread-safe concurrent flat index.
+    #[new]
+    pub fn new(dim: usize, metric: &str) -> PyResult<Self> {
+        if dim == 0 {
+            return Err(PyValueError::new_err("dimension must be greater than 0"));
+        }
+        let rust_metric = parse_metric(metric)?;
+        Ok(Self {
+            inner: Arc::new(CoreConcurrentFlatIndex::new(dim, rust_metric)),
+        })
+    }
+
+    /// Search for the top-`k` nearest neighbors to `query` concurrently.
+    ///
+    /// Releases the GIL via `py.detach` during the search execution, allowing
+    /// other Python threads to execute concurrently.
+    pub fn search(&self, py: Python<'_>, query: Vec<f32>, k: usize) -> PyResult<Vec<(u64, f32)>> {
+        if query.len() != self.inner.dim() {
+            return Err(PyValueError::new_err(format!(
+                "query dimension mismatch: expected {}, got {}",
+                self.inner.dim(),
+                query.len()
+            )));
+        }
+
+        let scored = py.detach(|| self.inner.search(&query, k));
+        Ok(scored.into_iter().map(|s| (s.id, s.score)).collect())
+    }
+
+    /// Add a single vector with an external ID under an exclusive write lock.
+    ///
+    /// Releases the GIL via `py.detach` while waiting for and holding the write lock.
+    pub fn add(&self, py: Python<'_>, id: u64, vector: Vec<f32>) -> PyResult<()> {
+        if vector.len() != self.inner.dim() {
+            return Err(PyValueError::new_err(format!(
+                "vector dimension mismatch: expected {}, got {}",
+                self.inner.dim(),
+                vector.len()
+            )));
+        }
+
+        py.detach(|| self.inner.add(id, &vector))
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Bulk-add vectors with external IDs under an exclusive write lock.
+    ///
+    /// Validates count and vector dimensions before entering `detach`.
+    pub fn add_batch(&self, py: Python<'_>, ids: Vec<u64>, vectors: Vec<Vec<f32>>) -> PyResult<()> {
+        if ids.len() != vectors.len() {
+            return Err(PyValueError::new_err(format!(
+                "ids count ({}) != vectors count ({})",
+                ids.len(),
+                vectors.len()
+            )));
+        }
+
+        let dim = self.inner.dim();
+        for (i, v) in vectors.iter().enumerate() {
+            if v.len() != dim {
+                return Err(PyValueError::new_err(format!(
+                    "vector at index {} has dimension {}, expected {}",
+                    i,
+                    v.len(),
+                    dim
+                )));
+            }
+        }
+
+        let mut batch = VectorBatch::new(dim);
+        for v in &vectors {
+            batch.push(v);
+        }
+
+        py.detach(|| self.inner.add_batch(&ids, &batch))
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Return the number of vectors stored in the index (`len(index)`).
+    ///
+    /// Releases the GIL across the read lock. For fast operations the GIL-release overhead
+    /// can sometimes exceed the wait time, but it is applied consistently here to ensure
+    /// readers never block Python-level threads during write contention.
+    pub fn __len__(&self, py: Python<'_>) -> usize {
+        py.detach(|| self.inner.len())
+    }
+
+    /// Alias for `__len__`.
+    pub fn len(&self, py: Python<'_>) -> usize {
+        self.__len__(py)
+    }
+
+    /// Return `true` if the index contains no vectors.
+    pub fn is_empty(&self, py: Python<'_>) -> bool {
+        self.__len__(py) == 0
+    }
+
+    /// Return vector dimensionality.
+    pub fn dim(&self) -> usize {
+        self.inner.dim()
     }
 }
 
