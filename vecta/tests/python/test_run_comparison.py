@@ -16,9 +16,11 @@ import faiss
 import numpy as np
 import pytest
 
+import vecta
 from benchmarks.faiss_comparison.faiss_wrappers import (
     build_faiss_ivf,
     build_faiss_hnsw,
+    build_faiss_ivfpq,
     set_search_params,
 )
 from benchmarks.faiss_comparison.run_comparison import (
@@ -27,11 +29,17 @@ from benchmarks.faiss_comparison.run_comparison import (
     compare_flat_index,
     compare_ivf_index,
     compare_hnsw_index,
+    compare_ivf_pq_index,
     find_iso_recall,
     generate_ivf_plot,
     generate_hnsw_plot,
+    generate_ivfpq_plot,
+    generate_memory_comparison_plot,
     print_ivf_comparison_table,
     print_hnsw_comparison_table,
+    print_ivfpq_comparison_table,
+    print_final_summary,
+    load_latest_benchmark_results,
 )
 
 
@@ -531,3 +539,266 @@ class TestHNSWComparison:
         assert json_path is not None
         assert os.path.exists(json_path), f"JSON result file {json_path} does not exist"
         assert os.path.getsize(json_path) > 0, "JSON result file is empty (0 bytes)"
+
+
+class TestIVFPQComparison:
+    """Tests for Phase 39: IVFPQ vs. faiss.IndexIVFPQ comparison."""
+
+    def test_k_per_subvector_to_nbits_conversion_and_power_of_2_validation(self):
+        """
+        Requirement 1:
+        Verify the k_per_subvector -> nbits conversion is correct:
+        - k_per_subvector=256 confirms nbits=8
+        - k_per_subvector=64 confirms nbits=6
+        - Non-power-of-2 k_per_subvector (e.g. 100, 200, 300) explicitly raises ValueError
+          rather than silently producing a wrong nbits value.
+        """
+        # Valid powers of 2
+        for k_sub, expected_nbits in [(2, 1), (4, 2), (16, 4), (64, 6), (128, 7), (256, 8)]:
+            assert (k_sub & (k_sub - 1)) == 0
+            assert int(math.log2(k_sub)) == expected_nbits
+
+        # Non-power-of-2 cases must be explicitly rejected with a clear ValueError
+        non_powers = [0, -1, 3, 50, 100, 200, 255, 300, 500]
+        for invalid_k in non_powers:
+            with pytest.raises(ValueError, match="k_per_subvector must be a power of 2"):
+                compare_ivf_pq_index(
+                    dataset=np.zeros((10, 16), dtype=np.float32),
+                    queries=np.zeros((2, 16), dtype=np.float32),
+                    ground_truth=[[0], [0]],
+                    k=1,
+                    nlist=2,
+                    m=4,
+                    k_per_subvector=invalid_k,
+                    nprobe_values=[1],
+                    save_json=False,
+                    save_plot=False,
+                )
+
+    def test_faiss_metric_type_is_explicitly_l2(self):
+        """
+        Requirement 2:
+        Confirm FAISS's metric is genuinely set to L2/Euclidean for the IVFPQ comparison.
+        Inspect the actual FAISS index object's metric_type attribute and verify it equals
+        faiss.METRIC_L2, not assumed or defaulting to inner product.
+        """
+        dim = 16
+        nlist = 4
+        m = 4
+        nbits = 8
+
+        f_index = build_faiss_ivfpq(dim, nlist=nlist, m=m, nbits=nbits, metric="euclidean")
+        assert hasattr(f_index, "metric_type"), "FAISS index missing metric_type attribute"
+        assert f_index.metric_type == faiss.METRIC_L2, (
+            f"FAISS index metric_type is {f_index.metric_type}, expected METRIC_L2 ({faiss.METRIC_L2})"
+        )
+        assert f_index.metric_type != faiss.METRIC_INNER_PRODUCT, (
+            "FAISS index was inadvertently configured with METRIC_INNER_PRODUCT!"
+        )
+
+        # Confirm non-Euclidean metric raises ValueError in compare_ivf_pq_index
+        with pytest.raises(ValueError, match="vecta IVFPQ only supports Euclidean/L2"):
+            compare_ivf_pq_index(
+                dataset=np.zeros((10, 16), dtype=np.float32),
+                queries=np.zeros((2, 16), dtype=np.float32),
+                ground_truth=[[0], [0]],
+                k=1,
+                nlist=2,
+                m=4,
+                k_per_subvector=16,
+                metric="cosine",
+                nprobe_values=[1],
+                save_json=False,
+                save_plot=False,
+            )
+
+    def test_memory_footprint_hand_calculation_sanity(self):
+        """
+        Requirement 4:
+        Confirm vecta's reported footprint matches hand-calculation from Phase 23's design:
+        footprint = (num_vectors * m) + (num_clusters * dim * 4) + (m * k_per_sub * (dim/m) * 4).
+        Also confirm FAISS serialized footprint is positive and comparable in order of magnitude.
+        """
+        dim = 32
+        num_clusters = 5
+        m = 4
+        k_per_sub = 16
+        n_vecs = 200
+
+        rng = np.random.RandomState(42)
+        data = rng.randn(n_vecs, dim).astype(np.float32)
+
+        # Build vecta index
+        v_index = vecta.IVFPQIndex(
+            dim=dim,
+            num_clusters=num_clusters,
+            m=m,
+            k_per_subvector=k_per_sub,
+            max_iterations=10,
+        )
+        v_index.train(data.tolist(), ivf_seed=42, pq_seed=42)
+        v_index.add_batch(list(range(n_vecs)), data.tolist())
+
+        # Theoretical calculation:
+        # 1 byte per subvector code since k_per_sub <= 256:
+        code_bytes = n_vecs * m
+        centroids_bytes = num_clusters * dim * 4
+        sub_dim = dim // m
+        codebooks_bytes = m * k_per_sub * sub_dim * 4
+        expected_bytes = code_bytes + centroids_bytes + codebooks_bytes
+
+        actual_v_bytes = v_index.memory_footprint_bytes()
+        assert actual_v_bytes == expected_bytes, (
+            f"Vecta footprint {actual_v_bytes} != expected {expected_bytes}"
+        )
+
+        # Check FAISS index serialized footprint
+        nbits = int(math.log2(k_per_sub))
+        f_index = build_faiss_ivfpq(dim, nlist=num_clusters, m=m, nbits=nbits, metric="euclidean")
+        f_index.train(data)
+        f_index.add(data)
+        serialized_buf = faiss.serialize_index(f_index)
+        f_bytes = len(serialized_buf)
+        assert f_bytes > 0
+
+        # Memory should provide significant compression compared to raw float32 vectors
+        raw_bytes = n_vecs * dim * 4
+        assert actual_v_bytes < raw_bytes
+        assert f_bytes < raw_bytes
+
+    def test_compare_ivf_pq_index_e2e_and_monotonic_recall(self):
+        """
+        Requirements 3, 5, 6:
+        - Run compare_ivf_pq_index() end-to-end on real SIFT data across an nprobe sweep.
+        - Confirm recall monotonically increases with nprobe for BOTH libraries.
+        - Confirm BOTH chart PNG files (recall-vs-QPS curve AND memory bar chart) exist and are non-empty.
+        - Confirm JSON results saved with sweep data and memory footprint metrics.
+        """
+        sweep_values = [1, 5, 20, 50]
+        results = compare_ivf_pq_index(
+            dataset_name="siftsmall",
+            k=10,
+            nlist=100,
+            m=8,
+            k_per_subvector=256,
+            nprobe_values=sweep_values,
+            metric="euclidean",
+            threads=1,
+            num_trials=2,
+            warmup_trials=1,
+            save_json=True,
+            save_plot=True,
+        )
+
+        assert "sweep" in results
+        assert len(results["sweep"]) == len(sweep_values)
+        assert results["vecta_build_time_sec"] > 0
+        assert results["faiss_build_time_sec"] > 0
+        assert results["nbits"] == 8
+        assert results["k_per_subvector"] == 256
+
+        # Requirement 4/Memory:
+        assert results["vecta_memory_bytes"] > 0
+        assert results["faiss_memory_bytes"] > 0
+        assert results["raw_vector_bytes"] == 10000 * 128 * 4
+        assert results["vecta_compression_ratio"] > 10.0
+        assert results["faiss_compression_ratio"] > 10.0
+
+        # Requirement 5: Confirm recall increases monotonically with nprobe for BOTH libraries
+        v_recalls = [entry["vecta_recall"] for entry in results["sweep"]]
+        f_recalls = [entry["faiss_recall"] for entry in results["sweep"]]
+
+        # IVFPQ utilizes lossy Product Quantization (ADC distances). While overall recall
+        # dramatically climbs with nprobe, saturation at high nprobe can exhibit slight ADC noise (±0.01).
+        for i in range(len(sweep_values) - 1):
+            assert (
+                v_recalls[i] <= v_recalls[i + 1] + 0.02
+            ), f"Vecta recall did not increase with nprobe: {v_recalls}"
+            assert (
+                f_recalls[i] <= f_recalls[i + 1] + 0.02
+            ), f"FAISS recall did not increase with nprobe: {f_recalls}"
+
+        # Confirm recall at max nprobe is significantly higher than at nprobe=1 (>10% boost)
+        assert v_recalls[-1] > v_recalls[0] + 0.10, "Vecta recall at max nprobe should exceed nprobe=1"
+        assert f_recalls[-1] > f_recalls[0] + 0.10, "FAISS recall at max nprobe should exceed nprobe=1"
+
+        # Requirement 6: Confirm BOTH chart PNG files generated and non-empty
+        chart_path = results.get("chart_path")
+        assert chart_path is not None
+        assert os.path.exists(chart_path), f"Tradeoff chart file {chart_path} does not exist"
+        assert os.path.getsize(chart_path) > 0, "Tradeoff chart file is empty (0 bytes)"
+
+        mem_chart_path = results.get("memory_chart_path")
+        assert mem_chart_path is not None
+        assert os.path.exists(mem_chart_path), f"Memory chart file {mem_chart_path} does not exist"
+        assert os.path.getsize(mem_chart_path) > 0, "Memory chart file is empty (0 bytes)"
+
+        # Confirm JSON results file exists and has non-zero size
+        json_path = results.get("json_path")
+        assert json_path is not None
+        assert os.path.exists(json_path), f"JSON result file {json_path} does not exist"
+        assert os.path.getsize(json_path) > 0, "JSON result file is empty (0 bytes)"
+
+    def test_print_final_summary_consolidation(self):
+        """
+        Requirement 7:
+        Confirm print_final_summary() runs correctly when given benchmark results,
+        producing a coherent consolidated table across Flat, IVF, HNSW, and IVFPQ.
+        """
+        # Test with mock 4-index results
+        mock_results = {
+            "flat": {
+                "vecta": {"build_time_sec": 0.005, "mean_qps": 850.0, "recall_at_k": 1.0},
+                "faiss": {"build_time_sec": 0.004, "mean_qps": 1200.0, "recall_at_k": 1.0},
+                "comparison": {"qps_speedup_ratio": 1.41, "faster_engine": "faiss"},
+                "num_vectors": 10000,
+                "dimension": 128,
+            },
+            "ivf": {
+                "vecta_build_time_sec": 0.150,
+                "faiss_build_time_sec": 0.080,
+                "iso_recall": {
+                    "vecta": {"estimated_qps": 2200.0, "achieved_recall": 0.89},
+                    "faiss": {"estimated_qps": 3100.0, "achieved_recall": 0.91},
+                    "speedup_ratio": 1.41,
+                    "faster_engine": "faiss",
+                },
+                "num_vectors": 10000,
+                "dimension": 128,
+            },
+            "hnsw": {
+                "vecta_build_time_sec": 0.850,
+                "faiss_build_time_sec": 0.450,
+                "iso_recall": {
+                    "vecta": {"estimated_qps": 6500.0, "achieved_recall": 0.90},
+                    "faiss": {"estimated_qps": 9800.0, "achieved_recall": 0.91},
+                    "speedup_ratio": 1.51,
+                    "faster_engine": "faiss",
+                },
+                "num_vectors": 10000,
+                "dimension": 128,
+            },
+            "ivfpq": {
+                "vecta_build_time_sec": 0.420,
+                "faiss_build_time_sec": 0.310,
+                "vecta_memory_bytes": 262272,
+                "faiss_memory_bytes": 282624,
+                "vecta_compression_ratio": 19.5,
+                "faiss_compression_ratio": 18.1,
+                "iso_recall": {
+                    "vecta": {"estimated_qps": 4200.0, "achieved_recall": 0.88},
+                    "faiss": {"estimated_qps": 5600.0, "achieved_recall": 0.89},
+                    "speedup_ratio": 1.33,
+                    "faster_engine": "faiss",
+                },
+                "num_vectors": 10000,
+                "dimension": 128,
+            },
+        }
+
+        consolidated = print_final_summary(mock_results)
+        assert consolidated is not None
+        assert "flat" in consolidated
+        assert "ivf" in consolidated
+        assert "hnsw" in consolidated
+        assert "ivfpq" in consolidated

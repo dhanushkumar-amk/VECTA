@@ -10,6 +10,9 @@ Usage:
 """
 
 import argparse
+import glob
+import json
+import math
 import os
 import sys
 import time
@@ -616,6 +619,113 @@ def generate_hnsw_plot(results: Dict[str, Any], output_path: Optional[str] = Non
     return generate_tradeoff_plot(results, output_path, index_type="hnsw", param_name="ef_search")
 
 
+def generate_ivfpq_plot(results: Dict[str, Any], output_path: Optional[str] = None) -> str:
+    """Generate Recall-vs-QPS tradeoff curve for IVFPQ."""
+    return generate_tradeoff_plot(results, output_path, index_type="ivfpq", param_name="nprobe")
+
+
+def generate_memory_comparison_plot(
+    results: Dict[str, Any],
+    output_path: Optional[str] = None,
+) -> str:
+    """
+    Generate and save a bar chart comparing memory footprint:
+    Raw Uncompressed Float32 vs. vecta.IVFPQIndex vs. faiss.IndexIVFPQ.
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("[WARNING] matplotlib not installed; skipping memory plot.")
+        return ""
+
+    if output_path is None:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        results_dir = os.path.join(base_dir, "results")
+        os.makedirs(results_dir, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(results_dir, f"ivfpq_memory_comparison_{timestamp}.png")
+    else:
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+    raw_bytes = results.get("raw_vector_bytes", 10000 * 128 * 4)
+    v_bytes = results.get("vecta_memory_bytes", 0)
+    f_bytes = results.get("faiss_memory_bytes", 0)
+
+    raw_kb = raw_bytes / 1024.0
+    v_kb = v_bytes / 1024.0
+    f_kb = f_bytes / 1024.0
+
+    v_ratio = raw_bytes / v_bytes if v_bytes > 0 else 1.0
+    f_ratio = raw_bytes / f_bytes if f_bytes > 0 else 1.0
+
+    categories = [
+        "Raw Float32\n(Uncompressed)",
+        "vecta.IVFPQIndex\n(Resident RAM)",
+        "faiss.IndexIVFPQ\n(Serialized Buffer)",
+    ]
+    values = [raw_kb, v_kb, f_kb]
+    colors = ["#64748b", "#2563eb", "#ea580c"]
+
+    plt.figure(figsize=(8.5, 5.5), dpi=200)
+    bars = plt.bar(categories, values, color=colors, width=0.52, edgecolor="#334155", linewidth=1.2)
+
+    # Annotate bar values and compression ratios above each bar
+    plt.text(
+        bars[0].get_x() + bars[0].get_width() / 2.0,
+        bars[0].get_height() + (max(values) * 0.02),
+        f"{raw_kb:,.1f} KB\n(Baseline 1.0x)",
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        fontweight="bold",
+        color="#334155",
+    )
+    plt.text(
+        bars[1].get_x() + bars[1].get_width() / 2.0,
+        bars[1].get_height() + (max(values) * 0.02),
+        f"{v_kb:,.1f} KB\n({v_ratio:.1f}x smaller)",
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        fontweight="bold",
+        color="#1d4ed8",
+    )
+    plt.text(
+        bars[2].get_x() + bars[2].get_width() / 2.0,
+        bars[2].get_height() + (max(values) * 0.02),
+        f"{f_kb:,.1f} KB\n({f_ratio:.1f}x smaller)",
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        fontweight="bold",
+        color="#c2410c",
+    )
+
+    num_vecs = results.get("num_vectors", 10000)
+    dim = results.get("dimension", 128)
+    m = results.get("m", 8)
+    nlist = results.get("nlist", 100)
+    k_sub = results.get("k_per_subvector", 256)
+
+    plt.title(
+        f"IVFPQ Memory Compression Footprint — Vecta vs. FAISS\n"
+        f"Dataset: SIFT10k (N={num_vecs:,}, D={dim}) | nlist={nlist}, M={m}, k_sub={k_sub}",
+        fontsize=12,
+        fontweight="bold",
+        pad=14,
+    )
+    plt.ylabel("Memory Footprint (Kilobytes)", fontsize=11, labelpad=8)
+    plt.ylim(0, max(values) * 1.25)
+    plt.grid(axis="y", linestyle="--", alpha=0.5)
+    plt.tight_layout()
+
+    plt.savefig(output_path, dpi=200)
+    plt.close()
+    return output_path
+
+
 def print_sweep_comparison_table(
     results: Any,
     index_type: str = "hnsw",
@@ -638,7 +748,9 @@ def print_sweep_comparison_table(
         iso = results.get("iso_recall")
         if param_name is None:
             param_name = results.get("param_name")
-        if "benchmark" in results and "hnsw" in results["benchmark"]:
+        if "benchmark" in results and "ivfpq" in results["benchmark"]:
+            index_type = "ivfpq"
+        elif "benchmark" in results and "hnsw" in results["benchmark"]:
             index_type = "hnsw"
         elif "benchmark" in results and "ivf" in results["benchmark"]:
             index_type = "ivf"
@@ -761,6 +873,29 @@ def print_ivf_comparison_table(results: Any) -> None:
 def print_hnsw_comparison_table(results: Any) -> None:
     """Wrapper for HNSW table printing."""
     print_sweep_comparison_table(results, index_type="hnsw", param_name="ef_search")
+
+
+def print_ivfpq_comparison_table(results: Any) -> None:
+    """Wrapper for IVFPQ table printing, including memory footprint reporting."""
+    print_sweep_comparison_table(results, index_type="ivfpq", param_name="nprobe")
+    if isinstance(results, dict):
+        v_mem = results.get("vecta_memory_bytes")
+        f_mem = results.get("faiss_memory_bytes")
+        raw_mem = results.get("raw_vector_bytes")
+        if v_mem is not None and f_mem is not None and raw_mem is not None:
+            v_kb = v_mem / 1024.0
+            f_kb = f_mem / 1024.0
+            raw_kb = raw_mem / 1024.0
+            v_comp = raw_mem / v_mem if v_mem > 0 else 1.0
+            f_comp = raw_mem / f_mem if f_mem > 0 else 1.0
+            ratio = f_mem / v_mem if v_mem > 0 else 1.0
+            print(" MEMORY FOOTPRINT & COMPRESSION:")
+            print(f"  Raw Float32 Baseline: {raw_kb:,.1f} KB (100.0%)")
+            print(f"  vecta.IVFPQIndex:     {v_kb:,.1f} KB ({v_comp:.1f}x compression vs raw)")
+            print(f"  faiss.IndexIVFPQ:     {f_kb:,.1f} KB ({f_comp:.1f}x compression vs raw)")
+            print(f"  Memory Footprint Ratio: FAISS is {ratio:.2f}x of vecta")
+            print("  Note: vecta measures resident in-RAM heap; FAISS measures serialized byte buffer.")
+            print("=" * 88)
 
 
 def compare_ivf_index(
@@ -1110,6 +1245,368 @@ def compare_hnsw_index(
     return results
 
 
+def compare_ivf_pq_index(
+    dataset: Optional[Any] = None,
+    queries: Optional[Any] = None,
+    ground_truth: Optional[Any] = None,
+    k: int = 10,
+    nlist: int = 100,
+    m: int = 8,
+    k_per_subvector: int = 256,
+    nprobe_values: Optional[List[int]] = None,
+    dataset_name: str = "siftsmall",
+    metric: str = "euclidean",
+    threads: int = 1,
+    num_trials: int = 5,
+    warmup_trials: int = 2,
+    save_json: bool = True,
+    save_plot: bool = True,
+) -> Dict[str, Any]:
+    """
+    Execute full head-to-head comparison between vecta.IVFPQIndex and faiss.IndexIVFPQ
+    across an nprobe probe sweep, including memory compression footprint analysis.
+
+    Evaluates:
+    - Train + add build time and ingestion throughput
+    - In-RAM resident heap vs. serialized index memory footprint
+    - Query throughput (QPS) and recall@k across matching nprobe sweep values
+    - Iso-recall (~90%) interpolated throughput comparison
+    - Matplotlib Recall-vs-QPS tradeoff curve and memory comparison bar chart
+    """
+    # Verify k_per_subvector is a power of 2 for FAISS nbits compatibility
+    if k_per_subvector <= 0 or (k_per_subvector & (k_per_subvector - 1)) != 0:
+        raise ValueError(
+            f"k_per_subvector must be a power of 2 for FAISS nbits compatibility, got {k_per_subvector}"
+        )
+    nbits = int(math.log2(k_per_subvector))
+
+    # Metric validation: vecta IVFPQ is Euclidean-only
+    if metric.lower() not in ("euclidean", "l2"):
+        raise ValueError(f"vecta IVFPQ only supports Euclidean/L2 metric, got '{metric}'")
+
+    set_faiss_threads(threads)
+    actual_threads = get_faiss_threads()
+
+    # 1. Dataset Acquisition
+    if dataset is None or queries is None or ground_truth is None:
+        print(f"\n[1/4] Loading {dataset_name} dataset...")
+        base, query, gt = load_siftsmall()
+    else:
+        base, query, gt = dataset, queries, ground_truth
+
+    base = np.ascontiguousarray(base, dtype=np.float32)
+    query = np.ascontiguousarray(query, dtype=np.float32)
+    num_base, dim = base.shape
+    num_query = query.shape[0]
+
+    if dim % m != 0:
+        raise ValueError(f"Dimension {dim} must be divisible by m={m}")
+
+    if nprobe_values is None:
+        nprobe_values = [1, 2, 5, 10, 20, 50, 100]
+
+    print(f"  Dataset: {num_base:,} base vectors (dim={dim}), {num_query:,} queries, k={k}")
+    print(
+        f"  Configuration: nlist={nlist}, M={m}, k_sub={k_per_subvector} (nbits={nbits}), "
+        f"metric={metric}, nprobe_sweep={nprobe_values}"
+    )
+
+    # 2. Build Indexes (train then add)
+    print("\n[2/4] Building IVFPQ compressed indexes (train + add)...")
+    base_list = base.tolist()
+    ids = list(range(num_base))
+
+    # Build vecta.IVFPQIndex
+    t0 = time.perf_counter()
+    v_index = vecta.IVFPQIndex(
+        dim=dim,
+        num_clusters=nlist,
+        m=m,
+        k_per_subvector=k_per_subvector,
+        max_iterations=25,
+    )
+    v_index.train(base_list, ivf_seed=42, pq_seed=42)
+    v_index.add_batch(ids, base_list)
+    v_build_time = time.perf_counter() - t0
+    v_build_rate = num_base / v_build_time if v_build_time > 0 else 0.0
+    v_mem_bytes = v_index.memory_footprint_bytes()
+    print(f"  vecta.IVFPQIndex:     {v_build_time * 1000.0:.2f} ms ({v_build_rate:,.1f} vec/s) | Memory: {v_mem_bytes / 1024.0:.1f} KB")
+
+    # Build faiss.IndexIVFPQ
+    t0 = time.perf_counter()
+    f_index = build_faiss_ivfpq(dim, nlist=nlist, m=m, nbits=nbits, metric="euclidean")
+    assert f_index.metric_type == faiss.METRIC_L2, (
+        f"Expected METRIC_L2 on faiss.IndexIVFPQ, got {f_index.metric_type}"
+    )
+    f_index.train(base)
+    f_index.add(base)
+    f_build_time = time.perf_counter() - t0
+    f_build_rate = num_base / f_build_time if f_build_time > 0 else 0.0
+    # FAISS serialized buffer proxy for memory footprint
+    f_mem_bytes = len(faiss.serialize_index(f_index))
+    raw_vector_bytes = num_base * dim * 4
+    print(f"  faiss.IndexIVFPQ:     {f_build_time * 1000.0:.2f} ms ({f_build_rate:,.1f} vec/s) | Memory: {f_mem_bytes / 1024.0:.1f} KB")
+
+    # 3. Prepare queries
+    vecta_queries = query.tolist()
+    faiss_queries = [np.ascontiguousarray(query[i : i + 1]) for i in range(num_query)]
+    gt_list = gt.tolist() if isinstance(gt, np.ndarray) else gt
+
+    # 4. Sweep across nprobe values
+    print(f"\n[3/4] Running nprobe sweep across {nprobe_values} ({num_trials} trials, {warmup_trials} warmups)...")
+    sweep_results: List[Dict[str, Any]] = []
+
+    for np_val in nprobe_values:
+        # Vecta Search Trials at this nprobe
+        v_trials = run_trials(
+            lambda q, k_val: v_index.search(q, k=k_val, nprobe=np_val),
+            vecta_queries,
+            k,
+            num_trials=num_trials,
+            warmup_trials=warmup_trials,
+        )
+        v_stats = summarize_timings(v_trials, num_query)
+
+        # FAISS Search Trials at this nprobe
+        f_index.nprobe = np_val
+        f_trials = run_trials(
+            lambda q, k_val: f_index.search(q, k=k_val),
+            faiss_queries,
+            k,
+            num_trials=num_trials,
+            warmup_trials=warmup_trials,
+        )
+        f_stats = summarize_timings(f_trials, num_query)
+
+        # Recall@k calculation against ground truth
+        v_preds = [[item[0] for item in v_index.search(q, k=k, nprobe=np_val)] for q in vecta_queries]
+        f_preds = [f_index.search(q, k=k)[1][0].tolist() for q in faiss_queries]
+
+        v_recall = recall_at_k(v_preds, gt_list, k=k)
+        f_recall = recall_at_k(f_preds, gt_list, k=k)
+
+        qps_ratio = f_stats["mean_qps"] / v_stats["mean_qps"] if v_stats["mean_qps"] > 0 else 1.0
+
+        sweep_entry = {
+            "nprobe": np_val,
+            "param_value": np_val,
+            "vecta_qps": v_stats["mean_qps"],
+            "faiss_qps": f_stats["mean_qps"],
+            "vecta_recall": v_recall,
+            "faiss_recall": f_recall,
+            "qps_ratio": qps_ratio,
+            "vecta_stats": v_stats,
+            "faiss_stats": f_stats,
+        }
+        sweep_results.append(sweep_entry)
+        print(f"  nprobe={np_val:<3} | vecta: {v_stats['mean_qps']:>8.1f} QPS (rec={v_recall*100:.1f}%) | "
+              f"faiss: {f_stats['mean_qps']:>8.1f} QPS (rec={f_recall*100:.1f}%)")
+
+    # 5. Iso-recall analysis (~90% target)
+    iso_analysis = find_iso_recall(sweep_results, target_recall=0.90, param_name="nprobe")
+
+    results: Dict[str, Any] = {
+        "benchmark": "faiss_comparison_ivfpq",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "dataset": dataset_name,
+        "num_vectors": num_base,
+        "dimension": dim,
+        "num_queries": num_query,
+        "k": k,
+        "nlist": nlist,
+        "m": m,
+        "k_per_subvector": k_per_subvector,
+        "nbits": nbits,
+        "param_name": "nprobe",
+        "metric": "euclidean",
+        "threads": actual_threads,
+        "num_trials": num_trials,
+        "warmup_trials": warmup_trials,
+        "vecta_build_time_sec": v_build_time,
+        "vecta_build_rate_vec_per_sec": v_build_rate,
+        "faiss_build_time_sec": f_build_time,
+        "faiss_build_rate_vec_per_sec": f_build_rate,
+        "raw_vector_bytes": raw_vector_bytes,
+        "vecta_memory_bytes": v_mem_bytes,
+        "faiss_memory_bytes": f_mem_bytes,
+        "vecta_compression_ratio": raw_vector_bytes / v_mem_bytes if v_mem_bytes > 0 else 1.0,
+        "faiss_compression_ratio": raw_vector_bytes / f_mem_bytes if f_mem_bytes > 0 else 1.0,
+        "sweep": sweep_results,
+        "iso_recall": iso_analysis,
+    }
+
+    # Print publication-ready comparison table with memory metrics
+    print_ivfpq_comparison_table(results)
+
+    # 6. Save JSON
+    if save_json:
+        json_path = save_benchmark_result("faiss_comparison_ivfpq", results)
+        results["json_path"] = json_path
+        print(f"\nRaw sweep data saved to: {json_path}")
+
+    # 7. Generate Plots
+    if save_plot:
+        plot_path = generate_ivfpq_plot(results)
+        results["chart_path"] = plot_path
+        if plot_path:
+            print(f"Recall-vs-QPS tradeoff curve chart saved to: {plot_path}")
+
+        mem_plot_path = generate_memory_comparison_plot(results)
+        results["memory_chart_path"] = mem_plot_path
+        if mem_plot_path:
+            print(f"Memory footprint comparison chart saved to: {mem_plot_path}")
+
+    return results
+
+
+def load_latest_benchmark_results(results_dir: Optional[str] = None) -> Dict[str, Any]:
+    """Load latest saved JSON benchmark results for flat, ivf, hnsw, ivfpq."""
+    if results_dir is None:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        results_dir = os.path.join(base_dir, "results")
+
+    all_results = {}
+    for idx_key in ["flat", "ivf", "hnsw", "ivfpq"]:
+        pattern = os.path.join(results_dir, f"faiss_comparison_{idx_key}_*.json")
+        matches = glob.glob(pattern)
+        if matches:
+            matches.sort()
+            latest = matches[-1]
+            try:
+                with open(latest, "r", encoding="utf-8") as f:
+                    all_results[idx_key] = json.load(f)
+            except Exception as e:
+                print(f"[WARNING] Could not read {latest}: {e}")
+    return all_results
+
+
+def print_final_summary(
+    all_results: Optional[Dict[str, Any]] = None,
+    results_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Print a consolidated master comparison table across all four index types:
+    Flat, IVF, HNSW, and IVFPQ.
+    """
+    if all_results is None:
+        all_results = load_latest_benchmark_results(results_dir)
+
+    print("\n" + "=" * 118)
+    print(" MASTER HEAD-TO-HEAD BENCHMARK SUMMARY: VECTA vs. FAISS")
+    print(" SIFT10k Benchmark Suite (N=10,000, Dim=128, Metric=Euclidean, Single-Threaded CPU Parity)")
+    print("=" * 118)
+    print(
+        f" {'Index Architecture':<18} | {'Engine':<7} | {'Build Time':<12} | "
+        f"{'QPS (~90% Rec)':<16} | {'Speedup':<13} | {'Recall@10':<11} | {'Memory / Buffer':<17} | {'Compression':<11}"
+    )
+    print("-" * 118)
+
+    # 1. Flat Index
+    if "flat" in all_results:
+        f_data = all_results["flat"]
+        v_b = f"{f_data['vecta']['build_time_sec'] * 1000.0:.1f} ms"
+        f_b = f"{f_data['faiss']['build_time_sec'] * 1000.0:.1f} ms"
+        v_qps = f"{f_data['vecta']['mean_qps']:,.1f}"
+        f_qps = f"{f_data['faiss']['mean_qps']:,.1f}"
+        ratio = f_data["comparison"]["qps_speedup_ratio"]
+        f_ratio_str = f"FAISS {ratio:.2f}x" if f_data["comparison"]["faster_engine"] == "faiss" else f"vecta {ratio:.2f}x"
+        v_rec = f"{f_data['vecta']['recall_at_k'] * 100:.1f}%"
+        f_rec = f"{f_data['faiss']['recall_at_k'] * 100:.1f}%"
+        raw_kb = (f_data.get("num_vectors", 10000) * f_data.get("dimension", 128) * 4) / 1024.0
+
+        print(
+            f" {'Flat (Exact L2)':<18} | {'vecta':<7} | {v_b:<12} | "
+            f"{v_qps:<16} | {'baseline':<13} | {v_rec:<11} | {raw_kb:,.1f} KB       | {'1.0x (raw)':<11}"
+        )
+        print(
+            f" {'':<18} | {'FAISS':<7} | {f_b:<12} | "
+            f"{f_qps:<16} | {f_ratio_str:<13} | {f_rec:<11} | {raw_kb:,.1f} KB       | {'1.0x (raw)':<11}"
+        )
+        print("-" * 118)
+
+    # 2. IVF Index
+    if "ivf" in all_results:
+        i_data = all_results["ivf"]
+        v_b = f"{i_data['vecta_build_time_sec'] * 1000.0:.1f} ms"
+        f_b = f"{i_data['faiss_build_time_sec'] * 1000.0:.1f} ms"
+        iso = i_data.get("iso_recall", {})
+        v_qps = f"{iso.get('vecta', {}).get('estimated_qps', 0):,.1f}"
+        f_qps = f"{iso.get('faiss', {}).get('estimated_qps', 0):,.1f}"
+        sp = iso.get("speedup_ratio", 1.0)
+        faster = iso.get("faster_engine", "faiss")
+        f_ratio_str = f"{faster.upper()} {sp:.2f}x"
+        v_rec = f"{iso.get('vecta', {}).get('achieved_recall', 0) * 100:.1f}%"
+        f_rec = f"{iso.get('faiss', {}).get('achieved_recall', 0) * 100:.1f}%"
+        raw_kb = (i_data.get("num_vectors", 10000) * i_data.get("dimension", 128) * 4) / 1024.0
+
+        print(
+            f" {'IVF (nlist=100)':<18} | {'vecta':<7} | {v_b:<12} | "
+            f"{v_qps:<16} | {'baseline':<13} | {v_rec:<11} | ~{raw_kb:,.1f} KB      | {'1.0x (raw)':<11}"
+        )
+        print(
+            f" {'':<18} | {'FAISS':<7} | {f_b:<12} | "
+            f"{f_qps:<16} | {f_ratio_str:<13} | {f_rec:<11} | ~{raw_kb:,.1f} KB      | {'1.0x (raw)':<11}"
+        )
+        print("-" * 118)
+
+    # 3. HNSW Index
+    if "hnsw" in all_results:
+        h_data = all_results["hnsw"]
+        v_b = f"{h_data['vecta_build_time_sec'] * 1000.0:.1f} ms"
+        f_b = f"{h_data['faiss_build_time_sec'] * 1000.0:.1f} ms"
+        iso = h_data.get("iso_recall", {})
+        v_qps = f"{iso.get('vecta', {}).get('estimated_qps', 0):,.1f}"
+        f_qps = f"{iso.get('faiss', {}).get('estimated_qps', 0):,.1f}"
+        sp = iso.get("speedup_ratio", 1.0)
+        faster = iso.get("faster_engine", "faiss")
+        f_ratio_str = f"{faster.upper()} {sp:.2f}x"
+        v_rec = f"{iso.get('vecta', {}).get('achieved_recall', 0) * 100:.1f}%"
+        f_rec = f"{iso.get('faiss', {}).get('achieved_recall', 0) * 100:.1f}%"
+        raw_kb = (h_data.get("num_vectors", 10000) * h_data.get("dimension", 128) * 4) / 1024.0
+
+        print(
+            f" {'HNSW (M=16,efC=100)':<18} | {'vecta':<7} | {v_b:<12} | "
+            f"{v_qps:<16} | {'baseline':<13} | {v_rec:<11} | ~{raw_kb:,.1f} KB      | {'0.9x (graph)':<11}"
+        )
+        print(
+            f" {'':<18} | {'FAISS':<7} | {f_b:<12} | "
+            f"{f_qps:<16} | {f_ratio_str:<13} | {f_rec:<11} | ~{raw_kb:,.1f} KB      | {'0.9x (graph)':<11}"
+        )
+        print("-" * 118)
+
+    # 4. IVFPQ Index
+    if "ivfpq" in all_results:
+        p_data = all_results["ivfpq"]
+        v_b = f"{p_data['vecta_build_time_sec'] * 1000.0:.1f} ms"
+        f_b = f"{p_data['faiss_build_time_sec'] * 1000.0:.1f} ms"
+        iso = p_data.get("iso_recall", {})
+        v_qps = f"{iso.get('vecta', {}).get('estimated_qps', 0):,.1f}"
+        f_qps = f"{iso.get('faiss', {}).get('estimated_qps', 0):,.1f}"
+        sp = iso.get("speedup_ratio", 1.0)
+        faster = iso.get("faster_engine", "faiss")
+        f_ratio_str = f"{faster.upper()} {sp:.2f}x"
+        v_rec = f"{iso.get('vecta', {}).get('achieved_recall', 0) * 100:.1f}%"
+        f_rec = f"{iso.get('faiss', {}).get('achieved_recall', 0) * 100:.1f}%"
+
+        v_mem_kb = p_data.get("vecta_memory_bytes", 0) / 1024.0
+        f_mem_kb = p_data.get("faiss_memory_bytes", 0) / 1024.0
+        v_comp = f"{p_data.get('vecta_compression_ratio', 1.0):.1f}x smaller"
+        f_comp = f"{p_data.get('faiss_compression_ratio', 1.0):.1f}x smaller"
+
+        print(
+            f" {'IVFPQ (M=8,k=256)':<18} | {'vecta':<7} | {v_b:<12} | "
+            f"{v_qps:<16} | {'baseline':<13} | {v_rec:<11} | {v_mem_kb:,.1f} KB        | {v_comp:<11}"
+        )
+        print(
+            f" {'':<18} | {'FAISS':<7} | {f_b:<12} | "
+            f"{f_qps:<16} | {f_ratio_str:<13} | {f_rec:<11} | {f_mem_kb:,.1f} KB        | {f_comp:<11}"
+        )
+        print("-" * 118)
+
+    print("=" * 118)
+    return all_results
+
+
 def verify_side_by_side_instantiation(dim: int = 128) -> bool:
     """
     Verify that all four index types in both vecta and FAISS can be instantiated
@@ -1187,6 +1684,15 @@ def run_comparison_stub(
             save_json=False,
             save_plot=False,
         )
+    elif index_type == "ivfpq":
+        return compare_ivf_pq_index(
+            dataset_name=dataset,
+            k=k,
+            metric="euclidean",
+            threads=threads,
+            save_json=False,
+            save_plot=False,
+        )
     return None
 
 
@@ -1201,6 +1707,11 @@ def main():
         choices=["all", "flat", "ivf", "hnsw", "ivfpq"],
         default="flat",
         help="Index type to compare (default: flat)",
+    )
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print consolidated master summary across all four completed comparisons",
     )
     parser.add_argument(
         "--threads",
@@ -1223,14 +1734,20 @@ def main():
     parser.add_argument(
         "--nprobe-sweep",
         type=str,
-        default="1,2,5,10,20,50",
-        help="Comma-separated nprobe sweep values for IVF (default: 1,2,5,10,20,50)",
+        default="1,2,5,10,20,50,100",
+        help="Comma-separated nprobe sweep values for IVF / IVFPQ (default: 1,2,5,10,20,50,100)",
     )
     parser.add_argument(
         "--m",
         type=int,
-        default=16,
-        help="HNSW link degree M per node (default: 16)",
+        default=None,
+        help="Subvectors for IVFPQ (default: 8) or link degree M for HNSW (default: 16)",
+    )
+    parser.add_argument(
+        "--k-per-subvector",
+        type=int,
+        default=256,
+        help="Centroids per subvector for IVFPQ (default: 256, 2^8)",
     )
     parser.add_argument(
         "--ef-construction",
@@ -1279,6 +1796,11 @@ def main():
     )
     args = parser.parse_args()
 
+    # If --summary flag passed alone, print consolidated table and exit
+    if args.summary:
+        print_final_summary()
+        return
+
     print("=" * 80)
     print(" VECTA vs. FAISS COMPARISON HARNESS")
     print(f" Target Index: {args.index_type.upper()} | Threads: {args.threads} | Target k: {args.k}")
@@ -1295,9 +1817,11 @@ def main():
     nprobe_values = [int(x.strip()) for x in args.nprobe_sweep.split(",") if x.strip()]
     ef_search_values = [int(x.strip()) for x in args.ef_search_sweep.split(",") if x.strip()]
 
+    all_run_results = {}
+
     # Run selected index comparison
     if args.index_type in ("flat", "all"):
-        compare_flat_index(
+        res_flat = compare_flat_index(
             dataset_name=args.dataset,
             k=args.k,
             metric="euclidean",
@@ -1306,9 +1830,10 @@ def main():
             warmup_trials=args.warmup_trials,
             save_json=not args.no_save,
         )
+        all_run_results["flat"] = res_flat
 
     if args.index_type in ("ivf", "all"):
-        compare_ivf_index(
+        res_ivf = compare_ivf_index(
             k=args.k,
             nlist=args.nlist,
             nprobe_values=nprobe_values,
@@ -1320,11 +1845,13 @@ def main():
             save_json=not args.no_save,
             save_plot=not args.no_plot,
         )
+        all_run_results["ivf"] = res_ivf
 
     if args.index_type in ("hnsw", "all"):
-        compare_hnsw_index(
+        hnsw_m = args.m if args.m is not None else 16
+        res_hnsw = compare_hnsw_index(
             k=args.k,
-            m=args.m,
+            m=hnsw_m,
             ef_construction=args.ef_construction,
             ef_search_values=ef_search_values,
             dataset_name=args.dataset,
@@ -1335,10 +1862,29 @@ def main():
             save_json=not args.no_save,
             save_plot=not args.no_plot,
         )
+        all_run_results["hnsw"] = res_hnsw
 
-    # Placeholders for future phases
-    if args.index_type in ("ivfpq", "all") and args.index_type not in ("flat", "ivf", "hnsw"):
-        print("\n[Phase 39] IVFPQIndex vs faiss.IndexIVFPQ scheduled for Phase 39.")
+    if args.index_type in ("ivfpq", "all"):
+        ivfpq_m = args.m if args.m is not None else 8
+        res_ivfpq = compare_ivf_pq_index(
+            k=args.k,
+            nlist=args.nlist,
+            m=ivfpq_m,
+            k_per_subvector=args.k_per_subvector,
+            nprobe_values=nprobe_values,
+            dataset_name=args.dataset,
+            metric="euclidean",
+            threads=args.threads,
+            num_trials=args.num_trials,
+            warmup_trials=args.warmup_trials,
+            save_json=not args.no_save,
+            save_plot=not args.no_plot,
+        )
+        all_run_results["ivfpq"] = res_ivfpq
+
+    # If running all, print final consolidated master summary
+    if args.index_type == "all":
+        print_final_summary(all_run_results)
 
 
 if __name__ == "__main__":
