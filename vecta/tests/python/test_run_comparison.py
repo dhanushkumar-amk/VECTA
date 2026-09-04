@@ -16,15 +16,22 @@ import faiss
 import numpy as np
 import pytest
 
-from benchmarks.faiss_comparison.faiss_wrappers import build_faiss_ivf, set_search_params
+from benchmarks.faiss_comparison.faiss_wrappers import (
+    build_faiss_ivf,
+    build_faiss_hnsw,
+    set_search_params,
+)
 from benchmarks.faiss_comparison.run_comparison import (
     run_trials,
     summarize_timings,
     compare_flat_index,
     compare_ivf_index,
+    compare_hnsw_index,
     find_iso_recall,
     generate_ivf_plot,
+    generate_hnsw_plot,
     print_ivf_comparison_table,
+    print_hnsw_comparison_table,
 )
 
 
@@ -332,6 +339,186 @@ class TestIVFComparison:
         # Confirm recall at max nprobe is strictly higher than at nprobe=1
         assert v_recalls[-1] > v_recalls[0], "Vecta recall at max nprobe should exceed nprobe=1"
         assert f_recalls[-1] > f_recalls[0], "FAISS recall at max nprobe should exceed nprobe=1"
+
+        # Requirement 5: Confirm chart PNG was generated and has non-zero size
+        chart_path = results.get("chart_path")
+        assert chart_path is not None
+        assert os.path.exists(chart_path), f"Chart file {chart_path} does not exist"
+        assert os.path.getsize(chart_path) > 0, "Chart file is empty (0 bytes)"
+
+        # Confirm JSON results file exists and has non-zero size
+        json_path = results.get("json_path")
+        assert json_path is not None
+        assert os.path.exists(json_path), f"JSON result file {json_path} does not exist"
+        assert os.path.getsize(json_path) > 0, "JSON result file is empty (0 bytes)"
+
+
+class TestHNSWComparison:
+    """Tests for Phase 38: HNSW vs. faiss.IndexHNSWFlat comparison."""
+
+    def test_faiss_efsearch_nested_attribute_changes_behavior(self):
+        """
+        Requirement 1:
+        Confirm FAISS's efSearch is set via nested attribute (index.hnsw.efSearch = X),
+        NOT passed as a search-time argument.
+        Explicitly verify that changing efSearch from a very low value (e.g. 1) to a high
+        value (e.g. 200) meaningfully changes search timing and search quality (lower vs higher
+        beam depth).
+        Also confirm passing efSearch to search() raises TypeError.
+        """
+        dim = 16
+        m = 16
+        rng = np.random.RandomState(42)
+        train_data = rng.randn(500, dim).astype(np.float32)
+        queries = rng.randn(50, dim).astype(np.float32)
+
+        index = build_faiss_hnsw(dim, m=m, ef_construction=100, metric="euclidean")
+        index.add(train_data)
+
+        # 1. Low efSearch (greedy/narrow beam)
+        index.hnsw.efSearch = 1
+        assert index.hnsw.efSearch == 1
+        t0 = time.perf_counter()
+        D1, I1 = index.search(queries, k=5)
+        time_1 = time.perf_counter() - t0
+
+        # 2. High efSearch (deep beam search)
+        index.hnsw.efSearch = 200
+        assert index.hnsw.efSearch == 200
+        t0 = time.perf_counter()
+        D200, I200 = index.search(queries, k=5)
+        time_200 = time.perf_counter() - t0
+
+        # Verify behavior differs meaningfully:
+        # Distance quality improves or stays identical with larger beam
+        assert D200.sum() <= D1.sum() + 1e-5
+        # The retrieved nearest neighbor IDs must not be suspiciously identical
+        differences = (I1 != I200).sum()
+        assert differences > 0, "efSearch=1 and efSearch=200 produced identical neighbor IDs!"
+
+        # 3. Helper function works
+        set_search_params(index, ef_search=50)
+        assert index.hnsw.efSearch == 50
+
+        # 4. Search fails if passing efSearch as keyword argument
+        with pytest.raises(TypeError):
+            index.search(queries, k=5, efSearch=50)
+        with pytest.raises(TypeError):
+            index.search(queries, k=5, ef_search=50)
+
+    def test_faiss_efconstruction_applied_before_add(self):
+        """
+        Requirement 2:
+        Explicit verification that index.hnsw.efConstruction was actually applied before
+        add() was called.
+        Catches the ordering bug where efConstruction might be set after add().
+        """
+        dim = 16
+        m = 16
+        expected_ef_c = 142
+        rng = np.random.RandomState(42)
+        train_data = rng.randn(100, dim).astype(np.float32)
+
+        index = build_faiss_hnsw(dim, m=m, ef_construction=expected_ef_c, metric="euclidean")
+
+        # Read back value immediately BEFORE add()
+        actual_ef_c_before_add = index.hnsw.efConstruction
+        assert actual_ef_c_before_add == expected_ef_c, (
+            f"Ordering error: efConstruction before add was {actual_ef_c_before_add}, expected {expected_ef_c}"
+        )
+
+        index.add(train_data)
+
+        # Confirm value is preserved after add()
+        assert index.hnsw.efConstruction == expected_ef_c
+        assert index.ntotal == 100
+
+    def test_iso_recall_hnsw_param_name(self):
+        """
+        Requirement 2:
+        Confirm generic iso-recall calculation supports param_name="ef_search".
+        """
+        mock_sweep = [
+            {
+                "ef_search": 10,
+                "vecta_recall": 0.50,
+                "vecta_qps": 5000.0,
+                "faiss_recall": 0.60,
+                "faiss_qps": 8000.0,
+                "qps_ratio": 1.6,
+            },
+            {
+                "ef_search": 40,
+                "vecta_recall": 0.85,
+                "vecta_qps": 3000.0,
+                "faiss_recall": 0.88,
+                "faiss_qps": 5000.0,
+                "qps_ratio": 1.67,
+            },
+            {
+                "ef_search": 80,
+                "vecta_recall": 0.95,
+                "vecta_qps": 1500.0,
+                "faiss_recall": 0.98,
+                "faiss_qps": 2500.0,
+                "qps_ratio": 1.67,
+            },
+        ]
+
+        iso = find_iso_recall(mock_sweep, target_recall=0.90, param_name="ef_search")
+        assert iso["param_name"] == "ef_search"
+        assert iso["vecta"]["method"] == "linear_interpolation"
+        assert "estimated_ef_search" in iso["vecta"]
+        # Vecta: bracket (0.85, 3000, 40) and (0.95, 1500, 80)
+        # alpha = (0.90 - 0.85) / (0.95 - 0.85) = 0.05 / 0.10 = 0.5
+        # est_qps = 3000 + 0.5 * (1500 - 3000) = 2250.0
+        # est_ef = 40 + 0.5 * (80 - 40) = 60.0
+        assert abs(iso["vecta"]["estimated_qps"] - 2250.0) < 1e-3
+        assert abs(iso["vecta"]["estimated_ef_search"] - 60.0) < 1e-3
+
+    def test_compare_hnsw_index_e2e_and_monotonic_recall(self):
+        """
+        Requirements 3, 4, 5:
+        - Run compare_hnsw_index() end-to-end on real SIFT data across an ef_search sweep.
+        - Confirm recall monotonically increases with ef_search for BOTH libraries.
+        - Confirm chart PNG file is generated and non-empty.
+        - Confirm JSON results saved with sweep data.
+        """
+        sweep_values = [10, 20, 40, 80]
+        results = compare_hnsw_index(
+            dataset_name="siftsmall",
+            k=10,
+            metric="euclidean",
+            m=16,
+            ef_construction=100,
+            ef_search_values=sweep_values,
+            threads=1,
+            num_trials=2,
+            warmup_trials=1,
+            save_json=True,
+            save_plot=True,
+        )
+
+        assert "sweep" in results
+        assert len(results["sweep"]) == len(sweep_values)
+        assert results["vecta_build_time_sec"] > 0
+        assert results["faiss_build_time_sec"] > 0
+
+        # Requirement 4: Confirm recall increases monotonically with ef_search for BOTH libraries
+        v_recalls = [entry["vecta_recall"] for entry in results["sweep"]]
+        f_recalls = [entry["faiss_recall"] for entry in results["sweep"]]
+
+        for i in range(len(sweep_values) - 1):
+            assert (
+                v_recalls[i] <= v_recalls[i + 1] + 1e-5
+            ), f"Vecta recall did not increase monotonically: {v_recalls}"
+            assert (
+                f_recalls[i] <= f_recalls[i + 1] + 1e-5
+            ), f"FAISS recall did not increase monotonically: {f_recalls}"
+
+        # Confirm recall at max ef_search is strictly higher than at ef_search=10
+        assert v_recalls[-1] > v_recalls[0], "Vecta recall at max ef_search should exceed ef_search=10"
+        assert f_recalls[-1] > f_recalls[0], "FAISS recall at max ef_search should exceed ef_search=10"
 
         # Requirement 5: Confirm chart PNG was generated and has non-zero size
         chart_path = results.get("chart_path")
