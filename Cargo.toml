@@ -18,6 +18,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
 tower = "0.5"
 utoipa = { version = "4.2", features = ["axum_extras"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+toml = "0.8"
 
 [[bin]]
 name = "vecta-server"

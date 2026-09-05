@@ -4,6 +4,8 @@
 // against this index. It stays in the codebase permanently, mirroring
 // FAISS's IndexFlatL2/IndexFlatIP role as a correctness baseline.
 
+use std::collections::HashSet;
+
 use super::batch::{
     batch_cosine_similarity, batch_dot_product, batch_euclidean_distance, VectorBatch,
 };
@@ -29,6 +31,8 @@ pub struct FlatIndex {
     pub ids: Vec<u64>,
     /// Distance metric used for search queries.
     pub metric: Metric,
+    /// Set of tombstoned (soft-deleted) external IDs excluded from search.
+    pub tombstones: HashSet<u64>,
 }
 
 impl FlatIndex {
@@ -38,6 +42,7 @@ impl FlatIndex {
             batch: VectorBatch::new(dim),
             ids: Vec::new(),
             metric,
+            tombstones: HashSet::new(),
         }
     }
 
@@ -54,14 +59,21 @@ impl FlatIndex {
                 ids.len()
             ));
         }
-        Ok(Self { batch, ids, metric })
+        Ok(Self {
+            batch,
+            ids,
+            metric,
+            tombstones: HashSet::new(),
+        })
     }
 
     /// Insert a single vector with its external ID.
     ///
+    /// If the ID was previously tombstoned, it is restored and its vector overwritten in-place.
+    ///
     /// # Panics
     /// - If `vector.len() != self.dim()`.
-    /// - If `id` already exists in the index.
+    /// - If `id` already exists in the index and is not tombstoned.
     pub fn add(&mut self, id: u64, vector: &[f32]) {
         assert_eq!(
             vector.len(),
@@ -70,6 +82,17 @@ impl FlatIndex {
             self.batch.dim,
             vector.len()
         );
+        if self.tombstones.remove(&id) {
+            let pos = self
+                .ids
+                .iter()
+                .position(|&stored_id| stored_id == id)
+                .expect("tombstoned id must exist in ids vec");
+            let start = pos * self.batch.dim;
+            let end = start + self.batch.dim;
+            self.batch.data[start..end].copy_from_slice(vector);
+            return;
+        }
         assert!(
             !self.ids.contains(&id),
             "FlatIndex::add: duplicate id {}",
@@ -124,16 +147,22 @@ impl FlatIndex {
         self.ids.extend_from_slice(ids);
     }
 
-    /// Number of vectors currently stored.
+    /// Number of active (non-tombstoned) vectors currently stored.
     #[inline]
     pub fn len(&self) -> usize {
+        self.batch.num_vectors.saturating_sub(self.tombstones.len())
+    }
+
+    /// Total number of raw stored records, including tombstoned records awaiting compaction.
+    #[inline]
+    pub fn total_records(&self) -> usize {
         self.batch.num_vectors
     }
 
-    /// Returns `true` if the index contains no vectors.
+    /// Returns `true` if the index contains no active vectors.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.batch.num_vectors == 0
+        self.len() == 0
     }
 
     /// Dimensionality of vectors in this index.
@@ -142,13 +171,57 @@ impl FlatIndex {
         self.batch.dim
     }
 
-    /// Look up a vector by its external ID.
+    /// Mark an external ID as deleted (tombstoning).
     ///
-    /// Linear scan through `self.ids` — acceptable for correctness testing,
-    /// not intended as a high-performance lookup path.
+    /// The vector remains in memory until [`Self::compact`] is called, but is immediately
+    /// excluded from [`Self::search`], [`Self::len`], and [`Self::get_vector`].
+    pub fn delete(&mut self, id: u64) -> Result<(), String> {
+        if !self.ids.contains(&id) || self.tombstones.contains(&id) {
+            return Err(format!("point with id {} not found", id));
+        }
+        self.tombstones.insert(id);
+        Ok(())
+    }
+
+    /// Reclaim memory by purging tombstoned records and rebuilding contiguous storage.
+    pub fn compact(&mut self) {
+        if self.tombstones.is_empty() {
+            return;
+        }
+        let mut new_batch = VectorBatch::new(self.batch.dim);
+        let mut new_ids = Vec::with_capacity(self.len());
+        for (i, &id) in self.ids.iter().enumerate() {
+            if !self.tombstones.contains(&id) {
+                new_batch.push(self.batch.get(i));
+                new_ids.push(id);
+            }
+        }
+        self.batch = new_batch;
+        self.ids = new_ids;
+        self.tombstones.clear();
+    }
+
+    /// Update a vector by ID via delete-then-add.
+    pub fn update(&mut self, id: u64, new_vector: &[f32]) -> Result<(), String> {
+        if new_vector.len() != self.batch.dim {
+            return Err(format!(
+                "dimension mismatch: expected {}, got {}",
+                self.batch.dim,
+                new_vector.len()
+            ));
+        }
+        self.delete(id)?;
+        self.add(id, new_vector);
+        Ok(())
+    }
+
+    /// Look up an active vector by its external ID.
     ///
-    /// Returns `None` if the ID is not found.
+    /// Linear scan through `self.ids` — returns `None` if not found or tombstoned.
     pub fn get_vector(&self, id: u64) -> Option<&[f32]> {
+        if self.tombstones.contains(&id) {
+            return None;
+        }
         self.ids
             .iter()
             .position(|&stored_id| stored_id == id)
@@ -157,20 +230,8 @@ impl FlatIndex {
 
     /// Brute-force k-nearest-neighbor search.
     ///
-    /// Computes the distance/similarity between `query` and every stored vector,
-    /// then returns the top `k` results sorted by relevance (ascending distance
-    /// for Euclidean, descending similarity for Cosine/DotProduct).
-    ///
-    /// This is the **correctness oracle** for the entire project: every future
-    /// ANN algorithm validates its recall against this method's output.
-    ///
-    /// # Panics
-    /// Panics if `query.len() != self.dim()`.
-    ///
-    /// # Edge cases
-    /// - Empty index → returns empty `Vec`
-    /// - `k == 0` → returns empty `Vec`
-    /// - `k > self.len()` → returns all vectors, correctly sorted
+    /// Computes distance/similarity between `query` and every stored vector,
+    /// filtering out tombstoned entries and returning the top `k` results.
     pub fn search(&self, query: &[f32], k: usize) -> Vec<ScoredId> {
         // Edge cases: nothing to search.
         if k == 0 || self.is_empty() {
@@ -200,12 +261,21 @@ impl FlatIndex {
             Metric::DotProduct => batch_dot_product(query, &self.batch),
         };
 
-        // Step 2: Zip scores with external IDs into ScoredId candidates.
-        let candidates: Vec<ScoredId> = scores
-            .into_iter()
-            .zip(self.ids.iter())
-            .map(|(score, &id)| ScoredId { id, score })
-            .collect();
+        // Step 2: Zip scores with external IDs, filtering out tombstoned IDs.
+        let candidates: Vec<ScoredId> = if self.tombstones.is_empty() {
+            scores
+                .into_iter()
+                .zip(self.ids.iter())
+                .map(|(score, &id)| ScoredId { id, score })
+                .collect()
+        } else {
+            scores
+                .into_iter()
+                .zip(self.ids.iter())
+                .filter(|(_, id)| !self.tombstones.contains(id))
+                .map(|(score, &id)| ScoredId { id, score })
+                .collect()
+        };
 
         // Step 3: Select top-k using the correct direction for the metric.
         match self.metric {
