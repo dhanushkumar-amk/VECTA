@@ -18,6 +18,7 @@
 //! - **Sharding**: Coordinator fan-out and candidate merging across shards via [`core::sharded_index`].
 
 pub mod core;
+pub mod server;
 mod python;
 
 use pyo3::prelude::*;
