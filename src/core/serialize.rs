@@ -1124,6 +1124,7 @@ pub fn load_ivf_pq_index(path: &Path) -> Result<IVFPQIndex, String> {
         metric,
         is_trained,
         pq_config,
+        tombstones: std::collections::HashSet::new(),
     })
 }
 

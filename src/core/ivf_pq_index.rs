@@ -13,6 +13,8 @@
 //! In v1, [`IVFPQIndex`] specifically supports [`Metric::Euclidean`]. Cosine or Dot Product
 //! metrics are not supported for fine ADC search in v1.
 
+use std::collections::HashSet;
+
 use crate::core::batch::VectorBatch;
 use crate::core::flat_index::Metric;
 use crate::core::ivf_index::{find_nearest_centroid, find_nearest_clusters};
@@ -43,6 +45,8 @@ pub struct IVFPQIndex {
     pub is_trained: bool,
     /// Configuration for Product Quantization training and codebook dimensions.
     pub pq_config: PQConfig,
+    /// Tombstoned (soft-deleted) external IDs.
+    pub tombstones: HashSet<u64>,
 }
 
 impl IVFPQIndex {
@@ -95,6 +99,7 @@ impl IVFPQIndex {
             metric: Metric::Euclidean,
             is_trained: false,
             pq_config,
+            tombstones: HashSet::new(),
         })
     }
 
@@ -104,16 +109,67 @@ impl IVFPQIndex {
         self.inverted_lists.len()
     }
 
-    /// Return the total number of vectors across all inverted lists.
+    /// Return the total number of active (non-tombstoned) vectors across all inverted lists.
     #[inline]
     pub fn len(&self) -> usize {
+        let total: usize = self.inverted_lists.iter().map(|list| list.len()).sum();
+        total.saturating_sub(self.tombstones.len())
+    }
+
+    /// Return the total number of raw stored records across all inverted lists,
+    /// including tombstoned records awaiting compaction.
+    #[inline]
+    pub fn total_records(&self) -> usize {
         self.inverted_lists.iter().map(|list| list.len()).sum()
     }
 
-    /// Return `true` if the index contains zero vectors.
+    /// Return `true` if the index contains zero active vectors.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Mark an external ID as deleted (tombstoning).
+    ///
+    /// The vector remains in memory until [`Self::compact`] is called, but is immediately
+    /// excluded from [`Self::search`] and [`Self::len`].
+    pub fn delete(&mut self, id: u64) -> Result<(), String> {
+        if self.tombstones.contains(&id) {
+            return Err(format!("point with id {} not found", id));
+        }
+        let found = self
+            .inverted_lists
+            .iter()
+            .any(|list| list.iter().any(|(stored_id, _)| *stored_id == id));
+        if !found {
+            return Err(format!("point with id {} not found", id));
+        }
+        self.tombstones.insert(id);
+        Ok(())
+    }
+
+    /// Reclaim memory by purging tombstoned records across all inverted lists.
+    pub fn compact(&mut self) {
+        if self.tombstones.is_empty() {
+            return;
+        }
+        for list in &mut self.inverted_lists {
+            list.retain(|(id, _)| !self.tombstones.contains(id));
+        }
+        self.tombstones.clear();
+    }
+
+    /// Update a vector by ID via delete-then-add.
+    pub fn update(&mut self, id: u64, new_vector: &[f32]) -> Result<(), String> {
+        if new_vector.len() != self.dim {
+            return Err(format!(
+                "dimension mismatch: expected {}, got {}",
+                self.dim,
+                new_vector.len()
+            ));
+        }
+        self.delete(id)?;
+        self.add(id, new_vector)
     }
 
     /// Return vector dimensionality.
@@ -213,6 +269,13 @@ impl IVFPQIndex {
             "IVFPQIndex::add: PQ codebooks missing despite is_trained=true".to_string()
         })?;
 
+        // If previously tombstoned, unmark and remove prior entry across inverted lists
+        if self.tombstones.remove(&id) {
+            for list in &mut self.inverted_lists {
+                list.retain(|(stored_id, _)| *stored_id != id);
+            }
+        }
+
         // 1. Coarse routing
         let nearest_cluster = find_nearest_centroid(&self.centroids, vector);
 
@@ -307,6 +370,9 @@ impl IVFPQIndex {
 
         for &cluster_idx in &selected_clusters {
             for &(id, ref code) in &self.inverted_lists[cluster_idx] {
+                if self.tombstones.contains(&id) {
+                    continue;
+                }
                 let dist = adc_distance(&adc_table, code)?;
                 candidates.push(ScoredId { id, score: dist });
             }
