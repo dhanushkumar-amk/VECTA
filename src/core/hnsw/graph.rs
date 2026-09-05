@@ -14,7 +14,7 @@
 //! 4. **Layer Memory Invariant**: `neighbors.len() == max_layer + 1`. Nodes allocate
 //!    adjacency lists exclusively for the layers in which they participate.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::core::batch::VectorBatch;
 use crate::core::flat_index::Metric;
@@ -52,6 +52,8 @@ pub struct HnswGraph {
     pub dim: usize,
     /// Distance or similarity metric used for vector comparisons.
     pub metric: Metric,
+    /// Internal node indices that have been tombstoned (soft-deleted).
+    pub tombstones: HashSet<usize>,
 }
 
 impl HnswGraph {
@@ -64,19 +66,49 @@ impl HnswGraph {
             entry_point: None,
             dim,
             metric,
+            tombstones: HashSet::new(),
         }
     }
 
-    /// Return the total number of nodes in the graph.
+    /// Return the total number of active (non-tombstoned) nodes in the graph.
     #[inline]
     pub fn len(&self) -> usize {
+        self.nodes.len().saturating_sub(self.tombstones.len())
+    }
+
+    /// Total number of raw graph nodes, including tombstoned nodes.
+    #[inline]
+    pub fn total_nodes(&self) -> usize {
         self.nodes.len()
     }
 
-    /// Return `true` if the graph contains no nodes.
+    /// Return `true` if the graph contains no active nodes.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
+        self.len() == 0
+    }
+
+    /// Mark an external ID as deleted in the HNSW graph (tombstoning).
+    ///
+    /// # Known Limitation (v0.1.0)
+    /// Tombstoned nodes are immediately excluded from search results and `len()`.
+    /// However, full removal from the underlying graph structure (rewiring neighboring
+    /// edges across layers) is deferred to future work. Tombstoned nodes remain in
+    /// node memory until the index is reconstructed.
+    pub fn delete(&mut self, id: u64) -> Result<(), String> {
+        if let Some(&node_idx) = self.id_to_index.get(&id) {
+            if !self.tombstones.contains(&node_idx) {
+                self.tombstones.insert(node_idx);
+                self.id_to_index.remove(&id);
+                return Ok(());
+            }
+        }
+        Err(format!("point with id {} not found", id))
+    }
+
+    /// Compaction placeholder for HNSW (requires full graph re-indexing).
+    pub fn compact(&mut self) {
+        // HNSW graph compaction requires rebuilding the multi-layer graph.
     }
 
     /// Return the dimensionality of vectors in this graph.

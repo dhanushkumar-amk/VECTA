@@ -149,6 +149,36 @@ impl IVFIndex {
         self.len() == 0
     }
 
+    /// Mark an external ID as deleted across all inverted lists.
+    pub fn delete(&mut self, id: u64) -> Result<(), String> {
+        for list in &mut self.inverted_lists {
+            if list.delete(id).is_ok() {
+                return Ok(());
+            }
+        }
+        Err(format!("point with id {} not found", id))
+    }
+
+    /// Reclaim memory across all inverted lists by purging tombstoned records.
+    pub fn compact(&mut self) {
+        for list in &mut self.inverted_lists {
+            list.compact();
+        }
+    }
+
+    /// Update a vector by ID via delete-then-add.
+    pub fn update(&mut self, id: u64, new_vector: &[f32]) -> Result<(), String> {
+        if new_vector.len() != self.dim {
+            return Err(format!(
+                "dimension mismatch: expected {}, got {}",
+                self.dim,
+                new_vector.len()
+            ));
+        }
+        self.delete(id)?;
+        self.add(id, new_vector)
+    }
+
     /// Return the number of vectors in each inverted list, in centroid order.
     ///
     /// Diagnostic helper for detecting cluster imbalance or empty clusters.

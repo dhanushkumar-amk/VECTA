@@ -913,6 +913,7 @@ pub fn load_hnsw_index(path: &Path) -> Result<(HnswGraph, HnswConfig), String> {
             entry_point,
             dim,
             metric,
+            tombstones: std::collections::HashSet::new(),
         },
         config,
     ))

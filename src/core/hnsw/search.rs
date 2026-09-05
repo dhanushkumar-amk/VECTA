@@ -59,6 +59,7 @@ impl HnswGraph {
         // 3. Map internal node indices back to external IDs and evaluate metric
         let external_candidates: Vec<ScoredId> = layer0_candidates
             .into_iter()
+            .filter(|c| !self.tombstones.contains(&(c.id as usize)))
             .map(|c| {
                 let internal_idx = c.id as usize;
                 let external_id = self.nodes[internal_idx].id;
