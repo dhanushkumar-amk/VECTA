@@ -13,7 +13,7 @@ async fn start_test_server() -> String {
         .await
         .expect("failed to bind ephemeral port");
     let addr = listener.local_addr().expect("failed to get local addr");
-    let state = Arc::new(AppState::new(PathBuf::from("./target/test_data")));
+    let state = Arc::new(AppState::new(PathBuf::from("./target/test_data"), None));
     let app = create_router(state);
 
     tokio::spawn(async move {

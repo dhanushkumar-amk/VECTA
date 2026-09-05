@@ -49,7 +49,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("./data"));
 
-    let state = Arc::new(AppState::new(data_dir));
+    let api_key = env::var("VECTA_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty());
+
+    if api_key.is_some() {
+        println!("API key authentication: ENABLED");
+    } else {
+        println!("API key authentication: DISABLED (open access mode)");
+    }
+
+    let state = Arc::new(AppState::new(data_dir, api_key));
     let app = create_router(state.clone());
 
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse()?;

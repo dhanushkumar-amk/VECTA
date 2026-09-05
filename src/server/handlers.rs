@@ -1,9 +1,10 @@
-//! Request handlers and error mapping for the Vecta REST API.
+//! Request handlers, error mapping, and OpenAPI annotations for the Vecta REST API.
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Request, State};
 use axum::http::StatusCode;
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
@@ -23,6 +24,8 @@ use crate::server::state::{AppState, CollectionIndex};
 /// and uniform JSON error payloads.
 #[derive(Debug)]
 pub enum AppError {
+    /// 401 Unauthorized: missing or invalid authentication token.
+    Unauthorized(String),
     /// 404 Not Found: requested entity does not exist.
     NotFound(String),
     /// 400 Bad Request: client provided invalid inputs (dimension mismatch, bad enum, etc.).
@@ -36,6 +39,7 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
@@ -44,6 +48,40 @@ impl IntoResponse for AppError {
 
         (status, Json(ErrorResponse { error: message })).into_response()
     }
+}
+
+/// Axum middleware enforcing Bearer API key authentication.
+///
+/// If `state.api_key` is None, authentication is bypassed (local development mode).
+/// If `state.api_key` is Some(key), incoming requests must provide an `Authorization: Bearer <key>`
+/// header matching the expected secret, or a 401 Unauthorized response is returned.
+pub async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    if let Some(ref expected_key) = state.api_key {
+        let auth_header = req
+            .headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok());
+
+        let authorized = match auth_header {
+            Some(val) if val.starts_with("Bearer ") => {
+                let token = val[7..].trim();
+                token == expected_key
+            }
+            _ => false,
+        };
+
+        if !authorized {
+            return Err(AppError::Unauthorized(
+                "Unauthorized: missing or invalid Bearer API key".to_string(),
+            ));
+        }
+    }
+
+    Ok(next.run(req).await)
 }
 
 /// Helper to parse user-facing string metrics into internal [`Metric`] enum.
@@ -71,6 +109,14 @@ fn metric_to_str(metric: Metric) -> &'static str {
 /// GET /health
 ///
 /// Liveness probe returning 200 OK. Requires no authentication or state access.
+#[utoipa::path(
+    get,
+    path = "/health",
+    responses(
+        (status = 200, description = "Service liveness status", body = HealthResponse)
+    ),
+    tag = "System"
+)]
 pub async fn health_handler() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
@@ -80,6 +126,21 @@ pub async fn health_handler() -> Json<HealthResponse> {
 /// POST /collections
 ///
 /// Creates a new named collection.
+#[utoipa::path(
+    post,
+    path = "/collections",
+    request_body = CreateCollectionRequest,
+    responses(
+        (status = 201, description = "Collection successfully created", body = CollectionInfo),
+        (status = 400, description = "Invalid request payload", body = ErrorResponse),
+        (status = 401, description = "Unauthorized: missing or invalid API key", body = ErrorResponse),
+        (status = 409, description = "Collection already exists", body = ErrorResponse)
+    ),
+    security(
+        ("BearerAuth" = [])
+    ),
+    tag = "Collections"
+)]
 pub async fn create_collection_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateCollectionRequest>,
@@ -113,13 +174,10 @@ pub async fn create_collection_handler(
         "flat" => CollectionIndex::Flat(FlatIndex::new(req.dim, metric)),
         "hnsw" => CollectionIndex::Hnsw(HnswGraph::new(req.dim, metric)),
         "ivf" => {
-            // Sensible default: 4 coarse clusters for v1 demonstration.
-            // Note: Per-collection tuning is planned for future phases.
             let num_clusters = 4;
             CollectionIndex::Ivf(IVFIndex::new(req.dim, num_clusters, metric))
         }
         "ivfpq" => {
-            // Sensible default: 2 subvectors if dim % 2 == 0, else 1.
             let m = if req.dim % 2 == 0 { 2 } else { 1 };
             let pq_config = PQConfig {
                 m,
@@ -158,6 +216,18 @@ pub async fn create_collection_handler(
 /// GET /collections
 ///
 /// Lists all registered collections with basic summary information.
+#[utoipa::path(
+    get,
+    path = "/collections",
+    responses(
+        (status = 200, description = "List of all registered collections", body = Vec<CollectionInfo>),
+        (status = 401, description = "Unauthorized: missing or invalid API key", body = ErrorResponse)
+    ),
+    security(
+        ("BearerAuth" = [])
+    ),
+    tag = "Collections"
+)]
 pub async fn list_collections_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<CollectionInfo>>, AppError> {
@@ -177,7 +247,6 @@ pub async fn list_collections_handler(
         });
     }
 
-    // Sort alphabetically by name for deterministic API output
     list.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(Json(list))
@@ -186,6 +255,22 @@ pub async fn list_collections_handler(
 /// GET /collections/:name
 ///
 /// Returns detailed metadata for a specific collection.
+#[utoipa::path(
+    get,
+    path = "/collections/{name}",
+    params(
+        ("name" = String, Path, description = "Name of collection to inspect")
+    ),
+    responses(
+        (status = 200, description = "Collection details", body = CollectionInfo),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    ),
+    security(
+        ("BearerAuth" = [])
+    ),
+    tag = "Collections"
+)]
 pub async fn get_collection_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -211,6 +296,22 @@ pub async fn get_collection_handler(
 /// DELETE /collections/:name
 ///
 /// Removes a collection from the registry and removes its on-disk snapshot and WAL.
+#[utoipa::path(
+    delete,
+    path = "/collections/{name}",
+    params(
+        ("name" = String, Path, description = "Name of collection to delete")
+    ),
+    responses(
+        (status = 200, description = "Collection successfully deleted"),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    ),
+    security(
+        ("BearerAuth" = [])
+    ),
+    tag = "Collections"
+)]
 pub async fn delete_collection_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -235,6 +336,22 @@ pub async fn delete_collection_handler(
 /// POST /collections/:name/checkpoint
 ///
 /// Manually triggers a snapshot checkpoint to disk and truncates the WAL.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/checkpoint",
+    params(
+        ("name" = String, Path, description = "Name of collection to checkpoint")
+    ),
+    responses(
+        (status = 200, description = "Snapshot successfully saved and WAL truncated"),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    ),
+    security(
+        ("BearerAuth" = [])
+    ),
+    tag = "Persistence"
+)]
 pub async fn checkpoint_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -252,6 +369,24 @@ pub async fn checkpoint_handler(
 /// POST /collections/:name/points
 ///
 /// Inserts a vector with its external ID into the specified collection.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/points",
+    params(
+        ("name" = String, Path, description = "Target collection name")
+    ),
+    request_body = InsertPointRequest,
+    responses(
+        (status = 201, description = "Vector point successfully indexed"),
+        (status = 400, description = "Dimension mismatch or duplicate ID", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    ),
+    security(
+        ("BearerAuth" = [])
+    ),
+    tag = "Points"
+)]
 pub async fn insert_point_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -320,6 +455,24 @@ pub async fn insert_point_handler(
 /// POST /collections/:name/search
 ///
 /// Executes a k-nearest-neighbor search query on the collection.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/search",
+    params(
+        ("name" = String, Path, description = "Target collection name")
+    ),
+    request_body = SearchRequest,
+    responses(
+        (status = 200, description = "Top-k nearest neighbor results", body = SearchResponse),
+        (status = 400, description = "Dimension mismatch or query error", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    ),
+    security(
+        ("BearerAuth" = [])
+    ),
+    tag = "Search"
+)]
 pub async fn search_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,

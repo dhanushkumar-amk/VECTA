@@ -81,12 +81,14 @@ pub struct AppState {
     pub collections: RwLock<HashMap<String, CollectionIndex>>,
     /// Path to the data directory for on-disk persistence and write-ahead logs.
     pub data_dir: PathBuf,
+    /// Optional API key for authenticating incoming HTTP requests.
+    pub api_key: Option<String>,
 }
 
 impl AppState {
     /// Create a new application state, automatically scanning and restoring
     /// any persisted collections and WALs from `data_dir`.
-    pub fn new(data_dir: PathBuf) -> Self {
+    pub fn new(data_dir: PathBuf, api_key: Option<String>) -> Self {
         if !data_dir.exists() {
             let _ = create_dir_all(&data_dir);
         }
@@ -116,6 +118,7 @@ impl AppState {
         Self {
             collections: RwLock::new(collections),
             data_dir,
+            api_key,
         }
     }
 
