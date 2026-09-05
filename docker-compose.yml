@@ -1,0 +1,15 @@
+services:
+  vecta:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vecta:local
+    container_name: vecta-server
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./data:/data
+    environment:
+      - VECTA_PORT=6333
+      - VECTA_DATA_DIR=/data
+    restart: unless-stopped

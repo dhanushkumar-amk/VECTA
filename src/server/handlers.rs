@@ -124,6 +124,7 @@ pub async fn create_collection_handler(
             let pq_config = PQConfig {
                 m,
                 k_per_subvector: 256.min(1 << req.dim.min(8)),
+                max_iterations: 100,
             };
             let num_clusters = 4;
             let ivf_pq = IVFPQIndex::new(req.dim, num_clusters, pq_config)
@@ -145,6 +146,9 @@ pub async fn create_collection_handler(
         metric: metric_to_str(index.metric()).to_string(),
         vector_count: index.len(),
     };
+
+    // Save initial snapshot to disk
+    let _ = state.save_collection_snapshot(&req.name, &index);
 
     registry.insert(req.name, index);
 
@@ -206,10 +210,7 @@ pub async fn get_collection_handler(
 
 /// DELETE /collections/:name
 ///
-/// Removes a collection from the in-memory registry.
-///
-/// Note: On-disk data persistence deletion will be wired in Phase 43;
-/// for Phase 41, this operates strictly in-memory.
+/// Removes a collection from the registry and removes its on-disk snapshot and WAL.
 pub async fn delete_collection_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -220,6 +221,8 @@ pub async fn delete_collection_handler(
         .map_err(|_| AppError::Internal("collection registry lock poisoned".to_string()))?;
 
     if registry.remove(&name).is_some() {
+        let _ = std::fs::remove_file(state.collection_file_path(&name));
+        let _ = std::fs::remove_file(state.wal_file_path(&name));
         Ok(StatusCode::OK)
     } else {
         Err(AppError::NotFound(format!(
@@ -227,6 +230,23 @@ pub async fn delete_collection_handler(
             name
         )))
     }
+}
+
+/// POST /collections/:name/checkpoint
+///
+/// Manually triggers a snapshot checkpoint to disk and truncates the WAL.
+pub async fn checkpoint_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, AppError> {
+    state.checkpoint_collection(&name).map_err(|e| {
+        if e.contains("not found") {
+            AppError::NotFound(e)
+        } else {
+            AppError::Internal(e)
+        }
+    })?;
+    Ok(StatusCode::OK)
 }
 
 /// POST /collections/:name/points
@@ -264,6 +284,11 @@ pub async fn insert_point_handler(
                 )));
             }
             flat.add(req.id, &req.vector);
+            // Append to Write-Ahead Log for crash safety
+            let wal_path = state.wal_file_path(&name);
+            if let Ok(mut writer) = crate::core::wal::open_wal_writer(&wal_path) {
+                let _ = writer.log_insert(req.id, &req.vector);
+            }
             Ok(StatusCode::CREATED)
         }
         CollectionIndex::Hnsw(graph) => {

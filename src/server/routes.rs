@@ -6,8 +6,9 @@ use axum::routing::{get, post};
 use axum::Router;
 
 use crate::server::handlers::{
-    create_collection_handler, delete_collection_handler, get_collection_handler, health_handler,
-    insert_point_handler, list_collections_handler, search_handler,
+    checkpoint_handler, create_collection_handler, delete_collection_handler,
+    get_collection_handler, health_handler, insert_point_handler, list_collections_handler,
+    search_handler,
 };
 use crate::server::state::AppState;
 
@@ -25,5 +26,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/collections/:name/points", post(insert_point_handler))
         .route("/collections/:name/search", post(search_handler))
+        .route("/collections/:name/checkpoint", post(checkpoint_handler))
         .with_state(state)
 }
