@@ -13,7 +13,9 @@ async fn start_test_server() -> String {
         .await
         .expect("failed to bind ephemeral port");
     let addr = listener.local_addr().expect("failed to get local addr");
-    let state = Arc::new(AppState::new(PathBuf::from("./target/test_data"), None));
+    let test_dir = PathBuf::from(format!("./target/test_server_{}", addr.port()));
+    let _ = std::fs::remove_dir_all(&test_dir);
+    let state = Arc::new(AppState::new(test_dir, None));
     let app = create_router(state);
 
     tokio::spawn(async move {

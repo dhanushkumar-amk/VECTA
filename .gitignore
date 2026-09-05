@@ -22,3 +22,14 @@ benchmarks/datasets/*.tgz
 benchmarks/datasets/siftsmall/
 benchmarks/results/*.json
 benchmarks/results/*.png
+
+# Data and runtime persistence
+/data/
+*.wal
+*.snap
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+

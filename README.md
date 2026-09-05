@@ -2,162 +2,149 @@
 
 # ⚡ Vecta
 
-**A fast, production-grade vector search engine built from scratch in Rust with Python bindings.**
+**A fast, production-grade vector search engine built from scratch in pure Rust with Python bindings, Axum REST API server, and Docker deployment.**
 
 [![CI](https://github.com/dhanushkumar-amk/VECTA/actions/workflows/ci.yml/badge.svg)](https://github.com/dhanushkumar-amk/VECTA/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![API Docs](https://img.shields.io/badge/OpenAPI-3.0.3-brightgreen.svg)](http://localhost:6333/docs)
+
+<br/>
+
+<img src="assets/vecta_demo.gif" width="800" alt="Vecta Server & Swagger UI Demo" />
 
 </div>
 
 ---
 
-## 📖 Overview
+## 📖 What is Vecta?
 
-**Vecta** is an open-source vector database engine designed and implemented from first principles in pure Rust, complete with high-performance CPython bindings via PyO3. Built across 40 rigorous engineering phases, Vecta provides:
+**Vecta** is an open-source vector database engine designed and implemented from first principles in pure Rust. It implements four core vector indexing algorithms—brute-force Flat, coarse-quantized Inverted File (IVF), Hierarchical Navigable Small World graphs (HNSW), and Product Quantization (IVFPQ)—with zero external C/C++ dependencies.
 
-- **Four Core Index Architectures**: Exact Flat, Inverted File (IVF), Hierarchical Navigable Small World graphs (HNSW), and Product Quantization (IVFPQ).
-- **Production Durability & Scaling**: Binary serialization, zero-copy memory mapping (`mmap`), Write-Ahead Logging (WAL) for crash recovery, thread-safe concurrent access (`RwLock` with GIL release), and horizontal sharding.
-- **Audited Performance**: Rigorously benchmarked against industry-standard **Meta FAISS** on SIFT10k under single-threaded CPU parity.
+Vecta operates in two complementary execution modes: as an **embedded in-process library** via PyO3 CPython bindings with GIL-released concurrency, and as a **standalone REST API microservice** (`vecta-server`) built on Axum and Tokio with Write-Ahead Logging (WAL) crash durability, API key authentication, and interactive Swagger UI documentation.
+
+---
+
+## ⚖️ Embedded vs. Server: Which Should You Use?
+
+Vecta’s architecture separates algorithmic indexing primitives (`src/core/`) from presentation surfaces. Both the embedded Python module and the standalone HTTP server consume the exact same underlying Rust core.
+
+| Dimension | Embedded Mode (`import vecta`) | Standalone Server (`vecta-server`) |
+| :--- | :--- | :--- |
+| **Execution Model** | In-process native CPython extension (`cdylib`) | Independent async daemon / Docker container |
+| **Primary Interface** | Native Python classes (`FlatIndex`, `HnswIndex`, etc.) | HTTP REST API (`/collections`, `/points`, `/search`) |
+| **Client Ecosystem** | Python (NumPy arrays, direct memory sharing) | Any language via HTTP, Python Client SDK, or LangChain |
+| **Call Latency** | Sub-microsecond (direct FFI function calls) | ~0.3 – 1.0 ms (loopback HTTP serialization + network stack) |
+| **Durability Model** | Explicit manual snapshot saving (`.save()`) | Continuous Write-Ahead Log (WAL) + auto recovery on startup |
+| **Concurrency** | `parking_lot::RwLock` + explicit GIL release | Multi-threaded Tokio async reactor + concurrent collections |
+| **Operational Scope** | Single machine, single process | Multi-tenant, containerized microservice, Kubernetes / Cloud |
+| **Best Used For** | Local ML pipelines, notebook research, edge inference | Microservices, polyglot applications, production deployments |
+
+---
+
+## 🚀 Quickstarts
+
+### 1. Quickstart — Embedded (Python)
+
+Install the compiled library via `maturin develop --release` or prebuilt wheels, then index and search in 5 lines of code:
+
+```python
+import vecta
+
+# Initialize 128-dimensional Euclidean index
+index = vecta.FlatIndex(dim=128, metric="euclidean")
+
+# Insert vectors and query top-k nearest neighbors
+index.add(0, [0.1] * 128)
+index.add(1, [0.9] * 128)
+results = index.search(query=[0.12] * 128, k=1)
+
+print(f"Nearest Vector ID: {results[0][0]}, Distance: {results[0][1]:.4f}")
+# Output: Nearest Vector ID: 0, Distance: 0.0200
+```
+
+---
+
+### 2. Quickstart — Standalone Server (Docker & Cargo)
+
+#### Run with Docker:
+```bash
+# Build and run with persistence mounted to local ./data
+docker build -t vecta .
+docker run -d -p 6333:6333 -v $(pwd)/data:/data -e VECTA_API_KEY=my_secret_key vecta
+```
+
+#### Run with Cargo:
+```bash
+cargo run --release --bin vecta-server
+# Server listens on http://0.0.0.0:6333 with interactive docs at http://localhost:6333/docs
+```
+
+#### Interacting via cURL:
+
+```bash
+# 1. Check server health
+curl http://localhost:6333/health
+
+# 2. Create an HNSW collection (dim=4, cosine metric)
+curl -X POST http://localhost:6333/collections \
+  -H "Authorization: Bearer my_secret_key" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "documents", "dim": 4, "index_type": "hnsw", "metric": "cosine"}'
+
+# 3. Ingest points
+curl -X POST http://localhost:6333/collections/documents/points \
+  -H "Authorization: Bearer my_secret_key" \
+  -H "Content-Type: application/json" \
+  -d '{"id": 101, "vector": [0.1, 0.2, 0.8, 0.5]}'
+
+# 4. Search top-k nearest neighbors
+curl -X POST http://localhost:6333/collections/documents/search \
+  -H "Authorization: Bearer my_secret_key" \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.12, 0.19, 0.78, 0.52], "k": 5, "ef_search": 64}'
+```
+
+---
+
+### 3. Python Client SDK
+
+Vecta includes a pure-Python, zero-dependency client in `clients/python/`:
+
+```python
+from vecta_client import VectaClient
+
+client = VectaClient(base_url="http://localhost:6333", api_key="my_secret_key")
+
+# Manage collections
+client.create_collection(name="kb", dim=128, index_type="hnsw", metric="euclidean")
+
+# Insert and search
+client.insert_point(name="kb", point_id=1, vector=[0.1] * 128)
+matches = client.search(name="kb", vector=[0.1] * 128, k=5)
+print(f"Found {len(matches)} matches: {matches}")
+```
 
 ---
 
 ## 🧱 The Four Index Architectures
 
-| Architecture | Class | When to Use | Typical Recall | Memory Footprint |
-| :--- | :--- | :--- | :--- | :--- |
-| **Flat** | `vecta.FlatIndex` | Ground-truth generation, small datasets ($N < 50\text{k}$), or exact similarity search. | **100%** (exact) | $1.0\times$ (Raw vectors) |
-| **IVF** | `vecta.IVFIndex` | Balanced search throughput and low indexing overhead via coarse k-means quantization. | **80% – 95%** | $1.0\times$ (Postings overhead $\sim 1\%$) |
-| **HNSW** | `vecta.HnswIndex` | High-throughput low-latency approximate search where memory is available. | **90% – 99%** | $1.1\times – 1.3\times$ (Graph edges) |
-| **IVFPQ** | `vecta.IVFPQIndex` | Extreme scale where memory budget is constrained; compresses vectors into compact subvector codes. | **50% – 70%** | **$0.05\times$** ($15\times – 20\times$ smaller) |
+| Architecture | Class / Config | Algorithm | Typical Recall | QPS (SIFT10k) | Resident Memory | Best Suited For |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Flat** | `vecta.FlatIndex`<br/>`"flat"` | Exact exhaustive brute-force search | **100.0%** (exact) | ~1,413 QPS | $1.0\times$ (Raw vectors) | Ground-truth generation, datasets $< 50\text{k}$, zero index construction overhead. |
+| **IVF** | `vecta.IVFIndex`<br/>`"ivf"` | Inverted list partition via Lloyd's k-means | **80% – 98%** | ~19,400 QPS | $1.0\times$ ($+1\%$ inverted lists) | Rapid index training, balanced query latency, medium-scale datasets. |
+| **HNSW** | `vecta.HnswIndex`<br/>`"hnsw"` | Hierarchical Navigable Small World graph skip-lists | **90% – 99%** | ~25,900 QPS | $1.1\times – 1.3\times$ (Adjacency edges) | Low-latency mission-critical search, maximum recall with sufficient RAM. |
+| **IVFPQ** | `vecta.IVFPQIndex`<br/>`"ivfpq"` | Product Quantization + Asymmetric Distance Computation | **50% – 70%** | ~45,700 QPS | **$0.05\times$** ($19.5\times$ compression) | Ultra-large-scale datasets where RAM budget is strictly constrained. |
 
 ---
 
-## 📦 Installation
+## 📊 Rigorous Benchmarks vs. Meta FAISS
 
-> **Note**: Vecta is currently distributed via source builds and downloadable release wheels on GitHub Releases (v0.1.0). It is not yet published to public PyPI.
+All benchmarks are performed on the standard **SIFT10k** dataset ($N=10,000$ base vectors, $D=128$, 100 queries, target $k=10$, Euclidean distance) under **strict single-threaded CPU parity** (`OMP_NUM_THREADS=1`, `threads=1`) on modern x86_64 hardware.
 
-### Build from Source via Maturin
-
-**Prerequisites**: [Rust toolchain](https://rustup.rs) (1.75+) and Python 3.10+.
-
-```bash
-# 1. Clone repository
-git clone https://github.com/dhanushkumar-amk/VECTA.git
-cd VECTA
-
-# 2. Set up virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# 3. Install build dependencies and compile release binary
-pip install maturin
-maturin develop --release
-```
-
-To install pre-built wheels across Linux, macOS, and Windows, download the platform `.whl` from the [GitHub Releases](https://github.com/dhanushkumar-amk/VECTA/releases) page and run `pip install <wheel_name>.whl`.
-
----
-
-## 🚀 Quickstart
-
-### 1. Flat Index (Exact Brute-Force)
-```python
-import vecta
-
-# Initialize index: 128-dimensional vectors using Euclidean (L2) distance
-index = vecta.FlatIndex(dim=128, metric="euclidean")
-
-# Insert vectors
-index.add(0, [0.1] * 128)
-index.add(1, [0.5] * 128)
-
-# Query top-k nearest neighbors
-results = index.search(query=[0.12] * 128, k=2)
-for vector_id, distance in results:
-    print(f"ID: {vector_id}, Distance: {distance:.4f}")
-```
-
-### 2. IVF Index (Inverted File with Coarse Centroids)
-```python
-import vecta
-import numpy as np
-
-dim = 128
-nlist = 100
-index = vecta.IVFIndex(dim=dim, num_clusters=nlist, metric="euclidean")
-
-# Train coarse k-means centroids
-train_vectors = np.random.randn(5000, dim).astype(np.float32).tolist()
-index.train(train_vectors, k=nlist, max_iterations=25, seed=42)
-
-# Add vectors in batch
-ids = list(range(5000))
-index.add_batch(ids, train_vectors)
-
-# Search probing the 10 closest centroid clusters
-query = [0.05] * dim
-results = index.search(query, k=10, nprobe=10)
-```
-
-### 3. HNSW Index (Hierarchical Navigable Small World)
-```python
-import vecta
-import numpy as np
-
-dim = 128
-# Configure graph: M=16 connections/layer, ef_construction=100 for graph building
-index = vecta.HnswIndex(
-    dim=dim,
-    m=16,
-    ef_construction=100,
-    ef_search=50,
-    metric="euclidean",
-    seed=42,
-)
-
-# Ingest vectors
-vectors = np.random.randn(10000, dim).astype(np.float32).tolist()
-index.add_batch(list(range(10000)), vectors)
-
-# Dynamic beam search at query time
-results = index.search(query=vectors[0], k=10, ef_search=80)
-```
-
-### 4. IVFPQ Index (Product Quantization & Compression)
-```python
-import vecta
-import numpy as np
-
-dim = 128
-# Quantization: M=8 subvectors (16 dims each), 256 centroids per subvector (8 bits)
-index = vecta.IVFPQIndex(
-    dim=dim,
-    num_clusters=100,
-    m=8,
-    k_per_subvector=256,
-    max_iterations=20,
-)
-
-data = np.random.randn(10000, dim).astype(np.float32).tolist()
-index.train(data, ivf_seed=42, pq_seed=42)
-index.add_batch(list(range(10000)), data)
-
-# Inspect resident memory consumption
-print(f"Memory: {index.memory_footprint_bytes() / 1024:.1f} KB")  # ~256 KB vs 5 MB raw!
-
-# Asymmetric Distance Computation (ADC) search
-results = index.search(query=data[0], k=10, nprobe=20)
-```
-
----
-
-## 📊 Benchmark Results: Vecta vs. Meta FAISS
-
-All benchmarks were conducted on the standard **SIFT10k** dataset ($N=10,000$ base vectors, $D=128$, 100 queries, target $k=10$) under single-threaded CPU parity (`OMP_NUM_THREADS=1`, `threads=1`).
-
-### Master Head-to-Head Comparison Table
+### Master Head-to-Head Summary
 
 ```text
 ======================================================================================================================
@@ -169,19 +156,18 @@ All benchmarks were conducted on the standard **SIFT10k** dataset ($N=10,000$ ba
  Flat (Exact L2)    | vecta   | 20.8 ms      | 1,413.0          | baseline      | 100.0%      | 5,000.0 KB       | 1.0x (raw) 
                     | FAISS   | 1.1 ms       | 5,573.1          | FAISS 3.94x   | 100.0%      | 5,000.0 KB       | 1.0x (raw) 
 ----------------------------------------------------------------------------------------------------------------------
- IVF (nlist=100)    | vecta   | 1952.8 ms    | 17,849.0         | baseline      | 90.0%       | ~5,000.0 KB      | 1.0x (raw) 
-                    | FAISS   | 44.2 ms      | 69,957.0         | FAISS 3.92x   | 90.0%       | ~5,000.0 KB      | 1.0x (raw) 
+ IVF (nlist=100)    | vecta   | 1,926.4 ms   | 19,408.5         | baseline      | 89.2%       | ~5,000.0 KB      | 1.0x (raw) 
+                    | FAISS   | 36.6 ms      | 68,569.3         | FAISS 3.53x   | 90.1%       | ~5,000.0 KB      | 1.0x (raw) 
 ----------------------------------------------------------------------------------------------------------------------
- HNSW (M=16,efC=100) | vecta   | 2438.9 ms    | 5,987.6          | baseline      | 88.9%       | ~5,000.0 KB      | 0.9x (graph)
-                    | FAISS   | 625.0 ms     | 59,720.8         | FAISS 9.97x   | 91.4%       | ~5,000.0 KB      | 0.9x (graph)
+ HNSW (M=16,efC=100)| vecta   | 2,164.9 ms   | 7,252.0          | baseline      | 88.9%       | ~5,000.0 KB      | 1.2x (graph)
+                    | FAISS   | 475.2 ms     | 22,611.0         | FAISS 3.12x   | 99.8%       | ~5,000.0 KB      | 1.2x (graph)
 ----------------------------------------------------------------------------------------------------------------------
- IVFPQ (M=8,k=256)  | vecta   | 6554.4 ms    | 25,434.4         | baseline      | 59.9%       | 256.1 KB        | 19.5x smaller
-                    | FAISS   | 929.8 ms     | 8,977.8          | VECTA 2.83x   | 64.4%       | 335.2 KB        | 14.9x smaller
-----------------------------------------------------------------------------------------------------------------------
+ IVFPQ (M=8,k=256)  | vecta   | 6,541.9 ms   | 16,781.7         | VECTA 1.04x   | 59.8%       | 262.3 KB         | 19.52x smaller
+                    | FAISS   | 875.0 ms     | 16,151.7         | baseline      | 64.4%       | 343.3 KB         | 14.92x smaller
 ======================================================================================================================
 ```
 
-### Visual Tradeoff Curves & Memory Analysis
+### Visual Tradeoff Curves & Memory Compression
 
 <div align="center">
 
@@ -191,73 +177,130 @@ All benchmarks were conducted on the standard **SIFT10k** dataset ($N=10,000$ ba
 #### HNSW Recall vs. QPS Tradeoff
 <img src="assets/hnsw_recall_vs_qps.png" width="750" alt="HNSW Recall vs QPS" />
 
-#### IVFPQ Recall vs. QPS Tradeoff & Memory Compression
+#### IVFPQ Recall vs. QPS Tradeoff & Memory Footprint
 <img src="assets/ivfpq_recall_vs_qps.png" width="48%" alt="IVFPQ Recall vs QPS" />
 <img src="assets/ivfpq_memory_comparison.png" width="48%" alt="IVFPQ Memory Comparison" />
 
 </div>
 
-### Honest Engineering Takeaways
+### Honest Performance Takeaways:
+- **Where Vecta Thrives**:
+  - **Product Quantization**: Vecta achieves a **$19.52\times$ memory reduction** (from $5.12\text{ MB}$ to $262\text{ KB}$), out-compressing FAISS's $14.92\times$ resident footprint while beating FAISS throughput at higher probe counts ($16,781$ vs $16,151$ QPS at $nprobe=50$).
+  - **Memory Safety & Portability**: Pure Rust eliminates segfaults, out-of-bounds pointer crashes, and tricky OpenMP/C++ runtime symbol collisions.
+- **Where FAISS Leads**:
+  - **Micro-Optimized SIMD Kernels**: FAISS utilizes hand-crafted AVX2/AVX-512 assembly and cache prefetching instructions (`_mm_prefetch`), yielding faster graph exploration and training cycles.
 
-1. **Where Vecta Holds Up Well**:
-   - **IVFPQ Query Throughput**: In IVFPQ searches, Vecta's precomputed ADC lookup table loop is extremely competitive. At $nprobe=50$, throughput reaches parity ($16,213$ vs $16,299$ QPS); at $nprobe=100$, Vecta's cache-friendly subvector additions surpass FAISS ($10,068$ vs $8,977$ QPS).
-   - **Memory Compression Ratio**: Vecta matches theoretical expectations with mathematical precision: raw float vectors occupy $5.0\text{ MB}$, while Vecta's in-RAM resident heap occupies only **$256.1\text{ KB}$** ($19.52\times$ compression).
-   - **Flat & IVF Proximity**: On exact Flat and coarse-quantized IVF, pure Rust without hand-tuned assembly comes within $3.9\times$ of FAISS’s decades-optimized AVX2/OpenBLAS matrix kernels.
-
-2. **Where FAISS Leads**:
-   - **HNSW Beam Traversal**: FAISS is $\approx 10\times$ faster at matched recall ($60\text{k}$ vs $6\text{k}$ QPS). FAISS utilizes software prefetching (`_mm_prefetch`), flat contiguous neighbor array memory layouts, and unrolled SIMD distance accumulators.
-   - **Index Training Throughput**: FAISS trains k-means centroids $7\times\text{--}40\times$ faster by leveraging OpenMP multi-threading during training and AVX-512 distance routines.
+#### Reproducing Benchmarks:
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r benchmarks/requirements.txt
+python benchmarks/faiss_comparison/run_comparison.py --dataset siftsmall --summary
+```
 
 ---
 
-## 🏗️ Architecture & Storage Layer
+## 🏗️ Architecture & Internals
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│                    Python Application Layer                 │
-│         (NumPy arrays, dict-based metadata filters, GIL)     │
-└──────────────────────────────┬──────────────────────────────┘
-                               │  PyO3 Bridge (src/python.rs)
-┌──────────────────────────────▼──────────────────────────────┐
-│                      Vecta Rust Core                        │
-├──────────────────────────────┬──────────────────────────────┤
-│ Index Algorithms:            │ Storage & Durability:        │
-│  - FlatIndex (Exact)         │  - Binary Serialization      │
-│  - IVFIndex (Lloyd's k-means)│  - Zero-Copy Memory Map(mmap)│
-│  - HnswIndex (Skip-graph)    │  - Write-Ahead Log (WAL)     │
-│  - IVFPQIndex (ADC tables)   │  - Metadata Post-Filtering   │
-├──────────────────────────────┴──────────────────────────────┤
-│ Concurrency & Scaling:                                      │
-│  - ConcurrentFlatIndex (RwLock, allow_threads)              │
-│  - ShardedFlatIndex (Hash-based partition coordinator)      │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CLIENT APPLICATIONS                               │
+│     Python Scripts         LangChain RAG Chains         cURL / Web UI       │
+└──────────────┬────────────────────────┬───────────────────────┬─────────────┘
+               │                        │                       │
+               │ Direct FFI             │ Python SDK            │ HTTP / JSON
+               │ (PyO3)                 │ (vecta_client)        │ (Bearer Auth)
+               ▼                        ▼                       ▼
+┌──────────────────────────────┐ ┌─────────────────────────────────────────────┐
+│       src/python.rs          │ │         vecta-server (Axum + Tokio)         │
+│  - PyO3 Class Bindings       │ │  - REST Routes (/collections, /points, etc) │
+│  - Python::allow_threads GIL │ │  - Auth Middleware & Swagger UI (/docs)     │
+│  - Buffer protocol decoding  │ │  - Background Checkpointing & Signal Trap   │
+└──────────────┬───────────────┘ └──────────────────────┬──────────────────────┘
+               │                                        │
+               └───────────────────┬────────────────────┘
+                                   │ Shared Memory Calls
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              VECTA RUST CORE                                │
+├──────────────────────────────────────┬──────────────────────────────────────┤
+│ Index Architectures:                 │ Durability & Storage Layer:          │
+│  - FlatIndex (Exhaustive SIMD)       │  - Write-Ahead Log (WAL + CRC32)     │
+│  - IVFIndex (Lloyd's k-means)        │  - Snapshot Serialization (Bincode)  │
+│  - HnswIndex (Hierarchical Graph)    │  - Memory-Mapped Zero-Copy (mmap)    │
+│  - IVFPQIndex (ADC Lookup Tables)    │  - Metadata Store (Filter ASTs)      │
+├──────────────────────────────────────┴──────────────────────────────────────┤
+│ Concurrency & Scaling:                                                      │
+│  - ConcurrentFlatIndex (RwLock-guarded reader-writer parallelism)           │
+│  - ShardedFlatIndex (Hash-based partitioning + parallel fan-out search)     │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Zero-Copy Memory Mapping (`mmap`)**: Query massive Flat indexes directly from disk with near-instant process cold starts and zero heap allocation overhead.
-- **Write-Ahead Logging (WAL)**: Append-only write log with CRC checksum verification guarantees index durability and automatic state replay across system crashes.
-- **Metadata Filtering**: Decoupled `MetadataStore` allows evaluating arbitrary boolean expressions (`Eq`, `Gt`, `Lt`, `And`, `Or`, `Not`) with post-filtered search.
-- **Concurrent Readers & Writers**: `ConcurrentFlatIndex` uses reader-writer locks (`parking_lot::RwLock`) and explicitly releases the Python GIL (`Python::allow_threads`) during search execution, enabling multi-threaded Python parallelism.
-- **Horizontal Sharding**: `ShardedFlatIndex` deterministically routes vector inserts across independent shards and coordinates parallel fan-out search and candidate merging.
+- **Write-Ahead Logging (WAL)**: `FlatIndex` mutations are appended to an on-disk write-ahead log with 32-bit CRC checksums before updating memory state. If the process is terminated ungracefully, the log automatically replays on restart.
+- **Interactive OpenAPI Documentation**: Built-in Swagger UI at `/docs` serves OpenAPI 3.0.3 definitions with schema inspection for every request and response model.
+- **Zero-Copy Memory Mapping**: `mmap` backing allows instantaneous startup times for gigabyte-scale flat indexes without inflating heap allocation.
+
+---
+
+## 🦜 LangChain Integration
+
+Vecta provides a first-class `VectaVectorStore` implementing LangChain’s standard `VectorStore` interface for RAG pipelines:
+
+```python
+from langchain_community.embeddings import FakeEmbeddings  # Or OpenAIEmbeddings
+from vecta_client.langchain import VectaVectorStore
+
+# 1. Initialize vector store hooked to vecta-server
+embeddings = FakeEmbeddings(size=128)
+vector_store = VectaVectorStore(
+    collection_name="knowledge_base",
+    embedding=embeddings,
+    base_url="http://localhost:6333",
+    api_key="my_secret_key"
+)
+
+# 2. Ingest documents and metadata
+vector_store.add_texts(
+    texts=["Rust vector database built from scratch.", "LangChain RAG integration."],
+    metadatas=[{"category": "systems"}, {"category": "ai"}]
+)
+
+# 3. Use as a retriever in a RAG question-answering chain
+retriever = vector_store.as_retriever(search_kwargs={"k": 2})
+relevant_docs = retriever.invoke("How is the vector database implemented?")
+for doc in relevant_docs:
+    print(f"Content: {doc.page_content} | Metadata: {doc.metadata}")
+```
 
 ---
 
 ## ⚠️ Known Limitations (v0.1.0)
 
-In the interest of engineering honesty and transparency, the following v1 constraints are documented:
+In keeping with engineering honesty, the following constraints are documented for v0.1.0:
 
-1. **IVFPQ is Euclidean-Only**: `IVFPQIndex` currently supports Euclidean ($L_2$) distance only. Cosine and Dot Product metrics are not yet supported for Product Quantization.
-2. **Single-Threaded HNSW Insertion**: Building the HNSW graph via `add` or `add_batch` executes sequentially on a single thread. Parallel graph construction is planned for future releases.
-3. **FlatIndex-Scoped Storage Features**: Write-Ahead Logging (`WAL`), zero-copy memory mapping (`mmap`), `ConcurrentFlatIndex`, and `ShardedFlatIndex` are currently implemented for `FlatIndex` only. Extending these primitives to IVF, HNSW, and IVFPQ is active roadmap work.
+1. **IVFPQ Metric Support**: `IVFPQIndex` currently supports Euclidean ($L_2$) distance. Cosine and Dot Product metrics are not yet supported for Product Quantization.
+2. **Single-Threaded HNSW Construction**: HNSW graph insertion executes sequentially on a single thread. Parallel graph construction is slated for v0.2.0.
+3. **WAL Durability Scope**: Crash-durable Write-Ahead Logging is currently wired for `FlatIndex`. HNSW, IVF, and IVFPQ collections persist via explicit snapshot checkpointing (`POST /collections/{name}/checkpoint`) and graceful shutdown signal handlers.
+4. **Standalone Server Sharding**: Distributed network clustering is in active design; horizontal sharding is currently provided via the in-process `ShardedFlatIndex`.
 
 ---
 
 ## 🛠️ Contributing & Development
 
-We welcome contributions! Review [CONTRIBUTING.md](CONTRIBUTING.md) for environment setup instructions, test execution, and benchmark procedures.
+We welcome external contributions! To run tests and verify changes locally:
 
-- **Rust Tests**: `cargo test`
-- **Python Tests**: `pytest tests/python/ -v`
-- **Benchmarking**: `python benchmarks/faiss_comparison/run_comparison.py --summary`
+```bash
+# Run pure-Rust unit and integration tests (including server & persistence)
+cargo test
+
+# Run standalone server tests
+cargo test --test server_tests --test auth_docs_tests --test persistence_server_tests
+
+# Run Python client & LangChain tests
+pytest clients/python/tests/ -v
+
+# Run embedded PyO3 test suite (175 tests)
+pytest tests/python/ -v
+```
 
 ---
 

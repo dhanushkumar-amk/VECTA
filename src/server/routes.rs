@@ -1,13 +1,13 @@
-//! Route registrations, OpenAPI generation, and Swagger UI integration for Vecta.
+//! Route registrations, OpenAPI generation, and interactive Swagger UI for Vecta.
 
 use std::sync::Arc;
 
 use axum::middleware::from_fn_with_state;
+use axum::response::Html;
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Json, Router};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
-use utoipa_swagger_ui::SwaggerUi;
 
 use crate::server::handlers::{
     auth_middleware, checkpoint_handler, create_collection_handler, delete_collection_handler,
@@ -83,6 +83,49 @@ impl Modify for SecurityAddon {
 )]
 pub struct ApiDoc;
 
+/// HTML template serving the official Swagger UI bundle pointing to `/api-docs/openapi.json`.
+const SWAGGER_UI_HTML: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vecta REST API - Swagger UI</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+  <style>
+    html { box-sizing: border-box; overflow: -moz-scrollbars-vertical; overflow-y: scroll; }
+    *, *:before, *:after { box-sizing: inherit; }
+    body { margin: 0; background: #fafafa; font-family: sans-serif; }
+    .topbar { display: none; }
+  </style>
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
+<script>
+  window.onload = () => {
+    window.ui = SwaggerUIBundle({
+      url: '/api-docs/openapi.json',
+      dom_id: '#swagger-ui',
+      presets: [
+        SwaggerUIBundle.presets.apis,
+        SwaggerUIBundle.SwaggerUIStandalonePreset
+      ],
+      layout: "BaseLayout",
+      deepLinking: true
+    });
+  };
+</script>
+</body>
+</html>"#;
+
+async fn openapi_json_handler() -> Json<utoipa::openapi::OpenApi> {
+    Json(ApiDoc::openapi())
+}
+
+async fn swagger_ui_handler() -> Html<&'static str> {
+    Html(SWAGGER_UI_HTML)
+}
+
 /// Construct the Axum application router with Swagger UI, OpenAPI spec, and API key auth.
 pub fn create_router(state: Arc<AppState>) -> Router {
     // Protected routes requiring authentication if VECTA_API_KEY is configured
@@ -103,7 +146,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // Public endpoints: /health probe and interactive Swagger documentation
     Router::new()
         .route("/health", get(health_handler))
-        .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .route("/api-docs/openapi.json", get(openapi_json_handler))
+        .route("/docs", get(swagger_ui_handler))
+        .route("/docs/", get(swagger_ui_handler))
         .merge(protected_routes)
         .with_state(state)
 }
