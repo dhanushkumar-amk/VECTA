@@ -1,92 +1,121 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
+import Link from "next/link";
+import MinimalCodeWindow from "./components/CodeHighlight";
 
-/* ───────────────── Navbar ───────────────── */
+/* ═══════════════════════════════════════════
+   ICONS
+   ═══════════════════════════════════════════ */
+
+function GithubIcon({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+    </svg>
+  );
+}
+
+function ArrowRight({ size = 16 }) {
+  return (
+    <svg width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12h14M12 5l7 7-7 7" />
+    </svg>
+  );
+}
+
+function CopyIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.5">
+      <rect x="5" y="5" width="8" height="8" rx="1.5" />
+      <path d="M3 10V3.5A.5.5 0 013.5 3H10" />
+    </svg>
+  );
+}
+
+function CheckIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-400">
+      <path d="M2 7l4 4 6-6" />
+    </svg>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   NAVBAR
+   ═══════════════════════════════════════════ */
+
 function Navbar() {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 40);
-    window.addEventListener("scroll", onScroll);
-    return () => window.removeEventListener("scroll", onScroll);
+    const handler = () => setScrolled(window.scrollY > 20);
+    window.addEventListener("scroll", handler, { passive: true });
+    return () => window.removeEventListener("scroll", handler);
   }, []);
 
   const links = [
     { label: "Features", href: "#features" },
-    { label: "Benchmarks", href: "#benchmarks" },
-    { label: "Architecture", href: "#architecture" },
+    { label: "Performance", href: "#performance" },
     { label: "Quickstart", href: "#quickstart" },
     { label: "Docs", href: "/docs" },
   ];
 
   return (
-    <nav
-      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${
-        scrolled
-          ? "glass-strong shadow-lg shadow-black/20"
-          : "bg-transparent"
-      }`}
-    >
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-        <a href="#" className="flex items-center gap-2.5 group">
-          <span className="text-2xl">⚡</span>
-          <span className="text-xl font-bold gradient-text-static tracking-tight">
-            Vecta
-          </span>
+    <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? "glass-nav" : ""}`}>
+      <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+        <a href="#" className="flex items-center gap-2">
+          <span className="text-lg">⚡</span>
+          <span className="text-base font-semibold tracking-tight text-[var(--color-text-primary)]">Vecta</span>
         </a>
 
-        {/* Desktop links */}
         <div className="hidden md:flex items-center gap-8">
           {links.map((l) => (
             <a
               key={l.href}
               href={l.href}
-              className="text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors duration-300 relative after:absolute after:bottom-[-4px] after:left-0 after:w-0 after:h-[2px] after:bg-[var(--color-primary-light)] after:transition-all after:duration-300 hover:after:w-full"
+              className="text-[13px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors duration-200"
             >
               {l.label}
             </a>
           ))}
+        </div>
+
+        <div className="hidden md:flex items-center gap-3">
           <a
             href="https://github.com/dhanushkumar-amk/VECTA"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--color-border)] text-sm text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-text-primary)] transition-all duration-300"
+            className="flex items-center gap-1.5 text-[13px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
           >
-            <GithubIcon />
-            GitHub
+            <GithubIcon size={15} />
+          </a>
+          <a
+            href="#quickstart"
+            className="text-[13px] font-medium px-4 py-1.5 rounded-lg bg-[var(--color-text-primary)] text-[var(--color-surface)] hover:opacity-90 transition-opacity"
+          >
+            Get Started
           </a>
         </div>
 
-        {/* Mobile toggle */}
         <button
-          className="md:hidden text-[var(--color-text-secondary)]"
+          className="md:hidden text-[var(--color-text-muted)]"
           onClick={() => setMenuOpen(!menuOpen)}
-          aria-label="Toggle menu"
+          aria-label="Menu"
         >
-          <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2">
-            {menuOpen ? (
-              <path d="M6 6l12 12M6 18L18 6" />
-            ) : (
-              <path d="M4 6h16M4 12h16M4 18h16" />
-            )}
+          <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5">
+            {menuOpen ? <path d="M5 5l10 10M5 15L15 5" /> : <path d="M3 6h14M3 10h14M3 14h14" />}
           </svg>
         </button>
       </div>
 
-      {/* Mobile menu */}
       {menuOpen && (
-        <div className="md:hidden glass-strong border-t border-[var(--color-border)] px-6 py-4 space-y-3">
+        <div className="md:hidden glass-nav border-t border-[var(--color-border)] px-6 py-4 space-y-3">
           {links.map((l) => (
-            <a
-              key={l.href}
-              href={l.href}
-              onClick={() => setMenuOpen(false)}
-              className="block text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
-            >
-              {l.label}
-            </a>
+            <a key={l.href} href={l.href} onClick={() => setMenuOpen(false)}
+              className="block text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+            >{l.label}</a>
           ))}
         </div>
       )}
@@ -94,91 +123,93 @@ function Navbar() {
   );
 }
 
-/* ───────────────── Hero ───────────────── */
-function HeroSection() {
+/* ═══════════════════════════════════════════
+   HERO
+   ═══════════════════════════════════════════ */
+
+function Hero() {
+  const [copied, setCopied] = useState(false);
+  const installCmd = "pip install maturin && maturin develop --release";
+
+  const handleCopy = async () => {
+    try { await navigator.clipboard.writeText(installCmd); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { }
+  };
+
   return (
-    <section className="relative min-h-screen flex items-center justify-center overflow-hidden pt-20 noise-overlay">
-      {/* Background orbs */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-[15%] left-[10%] w-[500px] h-[500px] rounded-full bg-[var(--color-primary)]/[0.07] blur-[120px] animate-pulse-glow" />
-        <div className="absolute bottom-[10%] right-[10%] w-[400px] h-[400px] rounded-full bg-[var(--color-accent)]/[0.06] blur-[100px] animate-pulse-glow" style={{ animationDelay: "1.5s" }} />
-        <div className="absolute top-[50%] left-[50%] w-[300px] h-[300px] rounded-full bg-[var(--color-primary-dark)]/[0.05] blur-[80px] animate-pulse-glow" style={{ animationDelay: "3s" }} />
-      </div>
+    <section className="relative min-h-[100vh] flex flex-col items-center justify-center px-6 overflow-hidden">
+      {/* Ambient glow */}
+      <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[500px] rounded-full bg-[var(--color-primary)]/[0.04] blur-[150px] pointer-events-none animate-fade-in" />
+      <div className="absolute top-2/3 left-1/3 w-[400px] h-[300px] rounded-full bg-[var(--color-accent)]/[0.03] blur-[120px] pointer-events-none animate-fade-in delay-3" />
 
-      {/* Grid pattern */}
-      <div
-        className="absolute inset-0 pointer-events-none opacity-[0.03]"
-        style={{
-          backgroundImage:
-            "linear-gradient(rgba(99,102,241,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.3) 1px, transparent 1px)",
-          backgroundSize: "60px 60px",
-        }}
-      />
+      {/* Subtle grid */}
+      <div className="absolute inset-0 pointer-events-none opacity-[0.02]" style={{
+        backgroundImage: "linear-gradient(var(--color-text-muted) 1px, transparent 1px), linear-gradient(90deg, var(--color-text-muted) 1px, transparent 1px)",
+        backgroundSize: "80px 80px",
+      }} />
 
-      <div className="relative z-10 max-w-5xl mx-auto px-6 text-center">
+      <div className="relative z-10 max-w-3xl mx-auto text-center">
         {/* Badge */}
-        <div className="animate-fade-in-up inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-card)]/60 mb-8">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-xs text-[var(--color-text-secondary)] font-medium tracking-wide uppercase">
-            Open Source · MIT License
-          </span>
+        <div className="animate-fade-up inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-card)] mb-8 text-xs text-[var(--color-text-muted)]">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+          Open Source · MIT Licensed
         </div>
 
-        {/* Title */}
-        <h1 className="animate-fade-in-up-delay-1 text-5xl sm:text-6xl lg:text-7xl font-extrabold leading-[1.1] tracking-tight mb-6">
-          Vector Search at{" "}
-          <span className="gradient-text">Warp Speed</span>
+        {/* Headline */}
+        <h1 className="animate-fade-up delay-1 text-[clamp(2.5rem,6vw,4.5rem)] font-bold leading-[1.08] tracking-[-0.035em] mb-6">
+          Vector search{" "}
+          <br className="hidden sm:block" />
+          at <span className="gradient-text">warp speed</span>
         </h1>
 
         {/* Subtitle */}
-        <p className="animate-fade-in-up-delay-2 text-lg sm:text-xl text-[var(--color-text-secondary)] max-w-2xl mx-auto mb-10 leading-relaxed">
-          A production-grade vector database engine built from scratch in{" "}
-          <span className="text-orange-400 font-semibold">pure Rust</span>.
+        <p className="animate-fade-up delay-2 text-base sm:text-lg text-[var(--color-text-secondary)] leading-relaxed max-w-xl mx-auto mb-10">
+          A production-grade vector database built from scratch in{" "}
+          <span className="text-[var(--color-text-primary)] font-medium">pure Rust</span>.
           Four index architectures, Python bindings, REST API, and LangChain integration.
         </p>
 
-        {/* CTA Buttons */}
-        <div className="animate-fade-in-up-delay-3 flex flex-col sm:flex-row items-center justify-center gap-4">
+        {/* CTA */}
+        <div className="animate-fade-up delay-3 flex flex-col sm:flex-row items-center justify-center gap-3 mb-8">
           <a
             href="#quickstart"
-            className="group relative px-7 py-3.5 rounded-xl font-semibold text-white bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] shadow-lg shadow-[var(--color-primary)]/25 hover:shadow-[var(--color-primary)]/40 transition-all duration-300 hover:scale-[1.03]"
+            className="group inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-[var(--color-text-primary)] text-[var(--color-surface)] text-sm font-semibold hover:opacity-90 transition-all duration-200"
           >
-            <span className="relative z-10 flex items-center gap-2">
-              Get Started
-              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" className="transition-transform duration-300 group-hover:translate-x-1">
-                <path d="M3 8h10M9 4l4 4-4 4" />
-              </svg>
-            </span>
+            Get Started
+            <span className="transition-transform duration-200 group-hover:translate-x-0.5"><ArrowRight size={14} /></span>
           </a>
           <a
             href="https://github.com/dhanushkumar-amk/VECTA"
             target="_blank"
             rel="noopener noreferrer"
-            className="px-7 py-3.5 rounded-xl font-semibold border border-[var(--color-border)] text-[var(--color-text-primary)] hover:border-[var(--color-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-300"
+            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg border border-[var(--color-border)] text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-border-light)] transition-all duration-200"
           >
-            <span className="flex items-center gap-2">
-              <GithubIcon />
-              View on GitHub
-            </span>
+            <GithubIcon size={15} />
+            GitHub
           </a>
         </div>
 
-        {/* Install command */}
-        <div className="animate-fade-in-up-delay-3 mt-12">
-          <CodeCopy text="pip install maturin && maturin develop --release" />
+        {/* Install */}
+        <div className="animate-fade-up delay-4 inline-flex items-center gap-3 px-4 py-2.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-card)]/60">
+          <span className="text-[var(--color-text-muted)] text-xs select-none">$</span>
+          <code className="text-xs sm:text-sm text-[var(--color-text-secondary)] font-mono">{installCmd}</code>
+          <button onClick={handleCopy} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer ml-1" title="Copy">
+            {copied ? <CheckIcon /> : <CopyIcon />}
+          </button>
         </div>
+      </div>
 
-        {/* Hero stats */}
-        <div className="mt-16 grid grid-cols-2 sm:grid-cols-4 gap-6 animate-fade-in-up-delay-3">
+      {/* Stats bar */}
+      <div className="relative z-10 mt-20 animate-fade-up delay-5">
+        <div className="flex items-center gap-8 sm:gap-14 text-center">
           {[
-            { value: "4", label: "Index Architectures" },
             { value: "45.7k", label: "QPS Peak" },
             { value: "19.5×", label: "Compression" },
-            { value: "100%", label: "Pure Rust" },
-          ].map((s) => (
-            <div key={s.label} className="text-center">
-              <div className="text-2xl sm:text-3xl font-bold gradient-text-static">{s.value}</div>
-              <div className="text-xs text-[var(--color-text-muted)] mt-1 uppercase tracking-wider">{s.label}</div>
+            { value: "4", label: "Index Types" },
+            { value: "100%", label: "Rust" },
+          ].map((s, i) => (
+            <div key={s.label} className={i > 0 ? "border-l border-[var(--color-border)] pl-8 sm:pl-14" : ""}>
+              <div className="text-xl sm:text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight">{s.value}</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5 uppercase tracking-wider">{s.label}</div>
             </div>
           ))}
         </div>
@@ -187,86 +218,109 @@ function HeroSection() {
   );
 }
 
-/* ───────────────── Features ───────────────── */
-function FeaturesSection() {
+/* ═══════════════════════════════════════════
+   FEATURES
+   ═══════════════════════════════════════════ */
+
+function Features() {
   const features = [
     {
       icon: "🧠",
-      title: "4 Index Architectures",
-      description:
-        "Flat, IVF, HNSW, and IVFPQ — each built from first principles. Choose exact search, graph-based speed, or 19× compressed quantization.",
-      tags: ["Flat", "IVF", "HNSW", "IVFPQ"],
+      title: "Four Index Architectures",
+      desc: "Flat (exact), IVF (k-means), HNSW (graph), and IVFPQ (compressed). Pick the right tradeoff for your data.",
     },
     {
       icon: "🦀",
-      title: "Pure Rust Core",
-      description:
-        "Zero external C/C++ dependencies. The entire engine — k-means clustering, graph traversal, product quantization — is hand-written Rust.",
-      tags: ["Memory Safe", "Zero Copy", "SIMD-Ready"],
+      title: "Pure Rust, Zero Dependencies",
+      desc: "The entire engine is hand-written Rust—k-means, graph traversal, product quantization. No C/C++ linkage.",
     },
     {
       icon: "🐍",
-      title: "Python Bindings (PyO3)",
-      description:
-        "Import as a native Python module with GIL-released concurrency. Sub-microsecond call latency via direct FFI.",
-      tags: ["NumPy", "PyO3", "GIL-Free"],
+      title: "Native Python Bindings",
+      desc: "PyO3 extension with GIL-released concurrency. Sub-microsecond call latency via direct FFI.",
     },
     {
       icon: "🌐",
       title: "REST API Server",
-      description:
-        "Production Axum + Tokio HTTP server with Bearer auth, WAL crash durability, and interactive Swagger UI at /docs.",
-      tags: ["Axum", "Tokio", "OpenAPI 3.0"],
+      desc: "Axum + Tokio HTTP server with Bearer auth, WAL crash recovery, and interactive Swagger UI.",
     },
     {
       icon: "🦜",
       title: "LangChain Integration",
-      description:
-        "First-class VectaVectorStore implementing LangChain's VectorStore interface. Drop into any RAG pipeline instantly.",
-      tags: ["RAG", "Retriever", "Embeddings"],
+      desc: "Drop-in VectaVectorStore implementing LangChain's VectorStore interface for RAG pipelines.",
     },
     {
       icon: "🐳",
       title: "Docker Ready",
-      description:
-        "One-command deployment with Docker or docker-compose. Persistent volumes, environment config, and fly.io ready.",
-      tags: ["Docker", "Compose", "Fly.io"],
+      desc: "One-command deployment. Persistent volumes, environment config, and cloud-ready.",
     },
   ];
 
   return (
-    <section id="features" className="relative py-28 px-6 overflow-hidden">
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[1px] bg-gradient-to-r from-transparent via-[var(--color-primary)]/30 to-transparent" />
+    <section id="features" className="relative py-32 px-6">
+      <div className="max-w-6xl mx-auto">
+        <div className="text-center mb-16">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-[var(--color-primary-light)] mb-3">Features</p>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Built for real workloads</h2>
+        </div>
 
-      <div className="max-w-7xl mx-auto">
-        <SectionHeader
-          eyebrow="Core Capabilities"
-          title="Built for Real Workloads"
-          description="Every component is purpose-built for production vector search — no wrappers, no compromises."
-        />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-px bg-[var(--color-border)] rounded-2xl overflow-hidden border border-[var(--color-border)]">
+          {features.map((f) => (
+            <div key={f.title} className="bg-[var(--color-surface)] p-8 hover:bg-[var(--color-surface-card)] transition-colors duration-300">
+              <span className="text-2xl block mb-4">{f.icon}</span>
+              <h3 className="text-[15px] font-semibold text-[var(--color-text-primary)] mb-2">{f.title}</h3>
+              <p className="text-sm text-[var(--color-text-muted)] leading-relaxed">{f.desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-16">
-          {features.map((f, i) => (
-            <div
-              key={f.title}
-              className="hover-card glass rounded-2xl p-7 group"
-              style={{ animationDelay: `${i * 0.1}s` }}
-            >
-              <div className="text-3xl mb-4">{f.icon}</div>
-              <h3 className="text-lg font-semibold text-[var(--color-text-primary)] mb-2">
-                {f.title}
-              </h3>
-              <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed mb-4">
-                {f.description}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {f.tags.map((t) => (
-                  <span
-                    key={t}
-                    className="text-[11px] px-2.5 py-1 rounded-full bg-[var(--color-primary)]/10 text-[var(--color-primary-light)] font-medium border border-[var(--color-primary)]/15"
-                  >
-                    {t}
-                  </span>
+/* ═══════════════════════════════════════════
+   INDEX TYPES
+   ═══════════════════════════════════════════ */
+
+function IndexTypes() {
+  const indexes = [
+    { name: "Flat", tag: "Exact", recall: "100%", qps: "1,413", mem: "1.0×", desc: "Brute-force exhaustive search. Zero setup.", color: "#60a5fa" },
+    { name: "IVF", tag: "Fast", recall: "80–98%", qps: "19,408", mem: "1.0×", desc: "K-means partitioned inverted file.", color: "#34d399" },
+    { name: "HNSW", tag: "Recommended", recall: "90–99%", qps: "25,967", mem: "1.1×", desc: "Graph-based skip-list. Best all-rounder.", color: "#a78bfa" },
+    { name: "IVFPQ", tag: "Compressed", recall: "50–70%", qps: "45,780", mem: "0.05×", desc: "Product quantized. 19× memory savings.", color: "#fbbf24" },
+  ];
+
+  return (
+    <section className="relative py-32 px-6">
+      <div className="max-w-6xl mx-auto">
+        <div className="text-center mb-16">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-[var(--color-primary-light)] mb-3">Index Types</p>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Choose your architecture</h2>
+          <p className="text-sm text-[var(--color-text-muted)] mt-3 max-w-md mx-auto">Each trades off recall, speed, and memory differently.</p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {indexes.map((idx) => (
+            <div key={idx.name} className="card-hover rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-card)] p-6 flex flex-col">
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-lg font-semibold tracking-tight">{idx.name}</h3>
+                <span className="text-[10px] font-medium uppercase tracking-wider px-2 py-0.5 rounded-full border" style={{ borderColor: idx.color + "40", color: idx.color, background: idx.color + "10" }}>
+                  {idx.tag}
+                </span>
+              </div>
+
+              <p className="text-xs text-[var(--color-text-muted)] mb-6 leading-relaxed">{idx.desc}</p>
+
+              <div className="mt-auto space-y-3">
+                {[
+                  { label: "Recall", value: idx.recall },
+                  { label: "QPS", value: idx.qps },
+                  { label: "Memory", value: idx.mem },
+                ].map((row) => (
+                  <div key={row.label} className="flex items-center justify-between text-sm">
+                    <span className="text-[var(--color-text-muted)]">{row.label}</span>
+                    <span className="font-mono text-xs font-medium text-[var(--color-text-primary)]">{row.value}</span>
+                  </div>
                 ))}
               </div>
             </div>
@@ -277,173 +331,330 @@ function FeaturesSection() {
   );
 }
 
-/* ───────────────── Benchmarks ───────────────── */
-function BenchmarksSection() {
-  const benchmarks = [
-    { engine: "Vecta Flat", qps: "1,413", recall: "100.0%", memory: "5,120 KB", compression: "1.0×" },
-    { engine: "Vecta IVF", qps: "19,408", recall: "89.2%", memory: "5,170 KB", compression: "1.0×" },
-    { engine: "Vecta HNSW", qps: "25,967", recall: "88.9%", memory: "6,144 KB", compression: "1.2×" },
-    { engine: "Vecta IVFPQ", qps: "45,780", recall: "59.8%", memory: "262 KB", compression: "19.5×" },
-  ];
+/* ═══════════════════════════════════════════
+   PERFORMANCE
+   ═══════════════════════════════════════════ */
 
-  const comparisons = [
+function Performance() {
+  const rows = [
     { metric: "IVFPQ Throughput", vecta: "16,782 QPS", faiss: "16,152 QPS", winner: "vecta" },
     { metric: "IVFPQ Compression", vecta: "19.52×", faiss: "14.92×", winner: "vecta" },
     { metric: "IVFPQ Memory", vecta: "262 KB", faiss: "343 KB", winner: "vecta" },
-    { metric: "IVF at ~90% Recall", vecta: "19,408 QPS", faiss: "68,569 QPS", winner: "faiss" },
-    { metric: "HNSW at ~90% Recall", vecta: "7,252 QPS", faiss: "22,611 QPS", winner: "faiss" },
+    { metric: "IVF ~90% Recall", vecta: "19,408 QPS", faiss: "68,569 QPS", winner: "faiss" },
+    { metric: "HNSW ~90% Recall", vecta: "7,252 QPS", faiss: "22,611 QPS", winner: "faiss" },
   ];
 
   return (
-    <section id="benchmarks" className="relative py-28 px-6 bg-[var(--color-surface-alt)]">
-      <div className="max-w-7xl mx-auto">
-        <SectionHeader
-          eyebrow="Performance"
-          title="Benchmarked Against Meta FAISS"
-          description="Head-to-head comparison on SIFT10k dataset under strict single-threaded CPU parity."
-        />
+    <section id="performance" className="relative py-32 px-6 bg-[var(--color-surface-alt)]">
+      <div className="max-w-4xl mx-auto">
+        <div className="text-center mb-16">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-[var(--color-primary-light)] mb-3">Performance</p>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Benchmarked against FAISS</h2>
+          <p className="text-sm text-[var(--color-text-muted)] mt-3 max-w-lg mx-auto">
+            SIFT10k dataset, single-threaded CPU parity. Vecta outperforms on compression and matches on throughput.
+          </p>
+        </div>
 
-        {/* Vecta Performance Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mt-16">
-          {benchmarks.map((b) => (
-            <div key={b.engine} className="hover-card glass rounded-2xl p-6 text-center">
-              <h4 className="text-sm text-[var(--color-text-muted)] uppercase tracking-wider mb-3 font-medium">
-                {b.engine}
-              </h4>
-              <div className="text-3xl font-bold gradient-text-static mb-1">{b.qps}</div>
-              <div className="text-xs text-[var(--color-text-muted)] mb-4">Queries / Second</div>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-[var(--color-text-muted)]">Recall</span>
-                  <span className="text-[var(--color-text-primary)] font-medium">{b.recall}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[var(--color-text-muted)]">Memory</span>
-                  <span className="text-[var(--color-text-primary)] font-medium">{b.memory}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[var(--color-text-muted)]">Compression</span>
-                  <span className="text-emerald-400 font-medium">{b.compression}</span>
-                </div>
-              </div>
+        {/* Table */}
+        <div className="rounded-2xl border border-[var(--color-border)] overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[var(--color-border)]">
+                <th className="text-left px-6 py-3.5 text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">Metric</th>
+                <th className="text-right px-6 py-3.5 text-xs text-[var(--color-primary-light)] font-medium uppercase tracking-wider">Vecta</th>
+                <th className="text-right px-6 py-3.5 text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">FAISS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.metric} className="border-b border-[var(--color-border)]/50 last:border-0 hover:bg-[var(--color-surface-hover)] transition-colors">
+                  <td className="px-6 py-3.5 text-[var(--color-text-secondary)]">{r.metric}</td>
+                  <td className={`px-6 py-3.5 text-right font-mono text-xs font-medium ${r.winner === "vecta" ? "text-emerald-400" : "text-[var(--color-text-secondary)]"}`}>
+                    {r.vecta}
+                    {r.winner === "vecta" && <span className="ml-1.5 text-[10px]">✓</span>}
+                  </td>
+                  <td className={`px-6 py-3.5 text-right font-mono text-xs font-medium ${r.winner === "faiss" ? "text-blue-400" : "text-[var(--color-text-secondary)]"}`}>
+                    {r.faiss}
+                    {r.winner === "faiss" && <span className="ml-1.5 text-[10px]">✓</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Highlight cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-8">
+          {[
+            { value: "19.52×", label: "Memory compression", sub: "vs FAISS 14.92×" },
+            { value: "45,780", label: "Peak QPS (IVFPQ)", sub: "Single-threaded" },
+            { value: "262 KB", label: "10k vectors stored", sub: "Down from 5,120 KB" },
+          ].map((c) => (
+            <div key={c.label} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-card)] p-5 text-center">
+              <div className="text-2xl font-semibold gradient-text-static">{c.value}</div>
+              <div className="text-xs text-[var(--color-text-secondary)] mt-1">{c.label}</div>
+              <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{c.sub}</div>
             </div>
           ))}
         </div>
-
-        {/* Vecta vs FAISS Table */}
-        <div className="mt-14 glass rounded-2xl overflow-hidden">
-          <div className="px-6 py-4 border-b border-[var(--color-border)]">
-            <h3 className="text-lg font-semibold">Vecta vs. Meta FAISS — Key Comparisons</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border)]">
-                  <th className="text-left px-6 py-3 text-[var(--color-text-muted)] font-medium">Metric</th>
-                  <th className="text-center px-6 py-3 text-[var(--color-primary-light)] font-medium">⚡ Vecta</th>
-                  <th className="text-center px-6 py-3 text-[var(--color-text-muted)] font-medium">FAISS</th>
-                  <th className="text-center px-6 py-3 text-[var(--color-text-muted)] font-medium">Winner</th>
-                </tr>
-              </thead>
-              <tbody>
-                {comparisons.map((c) => (
-                  <tr key={c.metric} className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-hover)] transition-colors">
-                    <td className="px-6 py-3 text-[var(--color-text-secondary)]">{c.metric}</td>
-                    <td className={`px-6 py-3 text-center font-medium ${c.winner === "vecta" ? "text-emerald-400" : "text-[var(--color-text-secondary)]"}`}>
-                      {c.vecta}
-                    </td>
-                    <td className={`px-6 py-3 text-center font-medium ${c.winner === "faiss" ? "text-emerald-400" : "text-[var(--color-text-secondary)]"}`}>
-                      {c.faiss}
-                    </td>
-                    <td className="px-6 py-3 text-center">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-                        c.winner === "vecta"
-                          ? "bg-emerald-400/10 text-emerald-400"
-                          : "bg-blue-400/10 text-blue-400"
-                      }`}>
-                        {c.winner === "vecta" ? "⚡ Vecta" : "FAISS"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
       </div>
     </section>
   );
 }
 
-/* ───────────────── Architecture ───────────────── */
-function ArchitectureSection() {
+/* ═══════════════════════════════════════════
+   ARCHITECTURE
+   ═══════════════════════════════════════════ */
+
+function Architecture() {
+  const [activeMode, setActiveMode] = useState("all");
+
   return (
-    <section id="architecture" className="relative py-28 px-6 overflow-hidden">
-      <div className="max-w-5xl mx-auto">
-        <SectionHeader
-          eyebrow="Under the Hood"
-          title="Architecture"
-          description="Both the embedded Python module and standalone HTTP server consume the same Rust core."
-        />
-
-        <div className="mt-16 code-block p-6 sm:p-8 overflow-x-auto glow-purple">
-          <pre className="text-[var(--color-text-secondary)] text-xs sm:text-sm leading-relaxed">
-{`┌─────────────────────────────────────────────────────────────────────┐
-│                       CLIENT APPLICATIONS                          │
-│    Python Scripts       LangChain RAG        cURL / Web UI         │
-└─────────┬──────────────────┬──────────────────────┬────────────────┘
-          │                  │                      │
-          │ Direct FFI       │ Python SDK           │ HTTP / JSON
-          │ (PyO3)           │ (vecta_client)       │ (Bearer Auth)
-          ▼                  ▼                      ▼
-┌────────────────────┐  ┌────────────────────────────────────────────┐
-│   src/python.rs    │  │       vecta-server (Axum + Tokio)          │
-│  PyO3 Bindings     │  │  REST Routes · Auth · Swagger UI · WAL    │
-└────────┬───────────┘  └──────────────────┬─────────────────────────┘
-         │                                 │
-         └────────────┬────────────────────┘
-                      │  Shared Memory Calls
-                      ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        VECTA RUST CORE                              │
-├──────────────────────────────┬──────────────────────────────────────┤
-│  Index Architectures:        │  Durability & Storage:               │
-│   • FlatIndex  (Exact SIMD)  │   • Write-Ahead Log (WAL + CRC32)   │
-│   • IVFIndex   (k-means)     │   • Snapshot (Bincode)              │
-│   • HnswIndex  (Graph)       │   • Memory-Mapped Zero-Copy         │
-│   • IVFPQIndex (ADC Tables)  │   • Metadata Filter ASTs            │
-├──────────────────────────────┴──────────────────────────────────────┤
-│  Concurrency: ConcurrentFlatIndex (RwLock) + ShardedFlatIndex      │
-└─────────────────────────────────────────────────────────────────────┘`}
-          </pre>
+    <section id="architecture" className="relative py-32 px-6">
+      <div className="max-w-4xl mx-auto">
+        <div className="text-center mb-16">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-[var(--color-primary-light)] mb-3">Architecture</p>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Two modes, one core</h2>
+          <p className="text-sm text-[var(--color-text-muted)] mt-3">Both execution modes share the same Rust engine.</p>
         </div>
 
-        {/* Execution modes */}
-        <div className="mt-14 grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="hover-card glass rounded-2xl p-7">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-[var(--color-primary)]/15 flex items-center justify-center text-xl">🐍</div>
-              <h3 className="text-lg font-semibold">Embedded Mode</h3>
+        {/* Interactive Mode Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+          <div
+            onClick={() => setActiveMode(activeMode === "embedded" ? "all" : "embedded")}
+            className={`card-hover rounded-2xl border p-7 cursor-pointer transition-all duration-300 ${
+              activeMode === "embedded"
+                ? "border-emerald-500/50 bg-emerald-950/10 shadow-lg shadow-emerald-500/5"
+                : "border-[var(--color-border)] bg-[var(--color-surface-card)] hover:border-zinc-700"
+            }`}
+          >
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-base">
+                  🐍
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                    Embedded Mode
+                    {activeMode === "embedded" && (
+                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                        Active
+                      </span>
+                    )}
+                  </h3>
+                  <p className="text-xs text-[var(--color-text-muted)]">import vecta</p>
+                </div>
+              </div>
+              <span className="text-[11px] font-mono text-emerald-400">&lt; 0.8 µs</span>
             </div>
-            <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed mb-4">
-              In-process CPython extension. Sub-microsecond latency via direct FFI calls. Best for local ML pipelines, notebooks, and edge inference.
-            </p>
-            <code className="text-xs text-[var(--color-accent-light)] font-mono bg-[var(--color-surface)]/50 px-3 py-1.5 rounded-lg">
-              import vecta
-            </code>
+            <ul className="space-y-2.5 text-sm text-[var(--color-text-secondary)]">
+              <li className="flex items-start gap-2"><span className="text-emerald-400 mt-0.5">·</span>In-process native CPython extension (PyO3)</li>
+              <li className="flex items-start gap-2"><span className="text-emerald-400 mt-0.5">·</span>Sub-microsecond latency (direct C-ABI)</li>
+              <li className="flex items-start gap-2"><span className="text-emerald-400 mt-0.5">·</span>GIL-released for true parallelism</li>
+              <li className="flex items-start gap-2"><span className="text-emerald-400 mt-0.5">·</span>Best for ML pipelines &amp; notebooks</li>
+            </ul>
           </div>
 
-          <div className="hover-card glass rounded-2xl p-7">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-[var(--color-accent)]/15 flex items-center justify-center text-xl">🌐</div>
-              <h3 className="text-lg font-semibold">Server Mode</h3>
+          <div
+            onClick={() => setActiveMode(activeMode === "server" ? "all" : "server")}
+            className={`card-hover rounded-2xl border p-7 cursor-pointer transition-all duration-300 ${
+              activeMode === "server"
+                ? "border-cyan-500/50 bg-cyan-950/10 shadow-lg shadow-cyan-500/5"
+                : "border-[var(--color-border)] bg-[var(--color-surface-card)] hover:border-zinc-700"
+            }`}
+          >
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-base">
+                  🌐
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                    Server Mode
+                    {activeMode === "server" && (
+                      <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/20">
+                        Active
+                      </span>
+                    )}
+                  </h3>
+                  <p className="text-xs text-[var(--color-text-muted)]">localhost:6333</p>
+                </div>
+              </div>
+              <span className="text-[11px] font-mono text-cyan-400">REST / JSON</span>
             </div>
-            <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed mb-4">
-              Async HTTP daemon with multi-threaded Tokio reactor. Any language via REST. Built for microservices, Kubernetes, and cloud deployments.
-            </p>
-            <code className="text-xs text-[var(--color-accent-light)] font-mono bg-[var(--color-surface)]/50 px-3 py-1.5 rounded-lg">
-              localhost:6333/docs
-            </code>
+            <ul className="space-y-2.5 text-sm text-[var(--color-text-secondary)]">
+              <li className="flex items-start gap-2"><span className="text-cyan-400 mt-0.5">·</span>Async Axum + Tokio HTTP daemon</li>
+              <li className="flex items-start gap-2"><span className="text-cyan-400 mt-0.5">·</span>Any language via REST / JSON</li>
+              <li className="flex items-start gap-2"><span className="text-cyan-400 mt-0.5">·</span>WAL crash durability + auto recovery</li>
+              <li className="flex items-start gap-2"><span className="text-cyan-400 mt-0.5">·</span>Best for microservices &amp; production</li>
+            </ul>
+          </div>
+        </div>
+
+        {/* Minimal Architecture Diagram */}
+        <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-card)] p-6 sm:p-8 shadow-xl">
+          {/* Header Controls */}
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-8 pb-4 border-b border-[var(--color-border)]">
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              <span className="text-xs font-mono text-[var(--color-text-secondary)]">Engine Architecture</span>
+            </div>
+
+            <div className="flex items-center gap-1 p-1 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-xs">
+              <button
+                onClick={() => setActiveMode("all")}
+                className={`px-2.5 py-1 rounded font-mono text-[11px] transition-all cursor-pointer ${
+                  activeMode === "all"
+                    ? "bg-[var(--color-text-primary)] text-[var(--color-surface)] font-medium shadow-sm"
+                    : "text-[var(--color-text-muted)] hover:text-white"
+                }`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setActiveMode("embedded")}
+                className={`px-2.5 py-1 rounded font-mono text-[11px] transition-all cursor-pointer ${
+                  activeMode === "embedded"
+                    ? "bg-emerald-500 text-zinc-950 font-medium shadow-sm"
+                    : "text-[var(--color-text-muted)] hover:text-white"
+                }`}
+              >
+                Embedded
+              </button>
+              <button
+                onClick={() => setActiveMode("server")}
+                className={`px-2.5 py-1 rounded font-mono text-[11px] transition-all cursor-pointer ${
+                  activeMode === "server"
+                    ? "bg-cyan-500 text-zinc-950 font-medium shadow-sm"
+                    : "text-[var(--color-text-muted)] hover:text-white"
+                }`}
+              >
+                Server
+              </button>
+            </div>
+          </div>
+
+          {/* Minimal Tree Structure */}
+          <div className="space-y-6">
+            {/* 1. Client Layer */}
+            <div className="text-center">
+              <div className="inline-flex items-center gap-2 sm:gap-3 px-4 py-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] text-xs font-mono text-zinc-300">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                <span className="text-[var(--color-text-muted)]">Clients:</span>
+                <span>Python SDK</span>
+                <span className="text-zinc-700">·</span>
+                <span>LangChain</span>
+                <span className="text-zinc-700">·</span>
+                <span>REST / cURL</span>
+              </div>
+            </div>
+
+            {/* Straight Clean Connectors */}
+            <div className="flex justify-center items-center">
+              <div className="grid grid-cols-2 gap-8 sm:gap-24 text-[10px] font-mono text-center">
+                <div className="flex flex-col items-center">
+                  <span className={`px-2 py-0.5 rounded border transition-colors ${
+                    activeMode === "all" || activeMode === "embedded"
+                      ? "text-emerald-400 border-emerald-500/30 bg-emerald-950/40"
+                      : "text-zinc-600 border-zinc-800 bg-zinc-900/30"
+                  }`}>
+                    FFI (PyO3) · &lt;0.8µs
+                  </span>
+                  <div className={`w-px h-5 my-1 transition-colors ${
+                    activeMode === "all" || activeMode === "embedded" ? "bg-emerald-500/60" : "bg-zinc-800"
+                  }`} />
+                  <span className={activeMode === "all" || activeMode === "embedded" ? "text-emerald-400" : "text-zinc-700"}>↓</span>
+                </div>
+
+                <div className="flex flex-col items-center">
+                  <span className={`px-2 py-0.5 rounded border transition-colors ${
+                    activeMode === "all" || activeMode === "server"
+                      ? "text-cyan-400 border-cyan-500/30 bg-cyan-950/40"
+                      : "text-zinc-600 border-zinc-800 bg-zinc-900/30"
+                  }`}>
+                    REST · Port 6333
+                  </span>
+                  <div className={`w-px h-5 my-1 transition-colors ${
+                    activeMode === "all" || activeMode === "server" ? "bg-cyan-500/60" : "bg-zinc-800"
+                  }`} />
+                  <span className={activeMode === "all" || activeMode === "server" ? "text-cyan-400" : "text-zinc-700"}>↓</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Middle Ingress Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* python.rs */}
+              <div className={`p-4 rounded-xl border transition-all duration-200 ${
+                activeMode === "all" || activeMode === "embedded"
+                  ? "border-emerald-500/30 bg-[var(--color-surface)] shadow-sm"
+                  : "border-[var(--color-border)] bg-[var(--color-surface)]/40 opacity-40"
+              }`}>
+                <div className="flex items-center justify-between mb-1">
+                  <h4 className="text-xs font-mono font-semibold text-zinc-200">python.rs</h4>
+                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+                    PyO3 FFI
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                  In-process CPython extension with direct pointer memory access and GIL release.
+                </p>
+              </div>
+
+              {/* vecta-server */}
+              <div className={`p-4 rounded-xl border transition-all duration-200 ${
+                activeMode === "all" || activeMode === "server"
+                  ? "border-cyan-500/30 bg-[var(--color-surface)] shadow-sm"
+                  : "border-[var(--color-border)] bg-[var(--color-surface)]/40 opacity-40"
+              }`}>
+                <div className="flex items-center justify-between mb-1">
+                  <h4 className="text-xs font-mono font-semibold text-zinc-200">vecta-server</h4>
+                  <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/10 px-1.5 py-0.2 rounded border border-cyan-500/20">
+                    Axum · WAL
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                  Tokio HTTP daemon with Bearer auth, WAL crash persistence, and Swagger docs.
+                </p>
+              </div>
+            </div>
+
+            {/* Clean Down Connector into Core */}
+            <div className="flex flex-col items-center justify-center my-1">
+              <div className="w-px h-5 bg-zinc-800" />
+              <span className="text-zinc-600 text-[10px]">↓</span>
+            </div>
+
+            {/* 3. Core Engine Card */}
+            <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-center">
+              <div className="flex items-center justify-center gap-2 mb-3">
+                <span className="text-xs font-mono font-semibold text-zinc-200 uppercase tracking-wider">
+                  Vecta Rust Core Engine
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                {[
+                  { name: "Flat", desc: "SIMD Exact" },
+                  { name: "IVF", desc: "K-Means Centroids" },
+                  { name: "HNSW", desc: "Skip-List Graph" },
+                  { name: "IVFPQ", desc: "19.5× Quantized" },
+                ].map((item) => (
+                  <div key={item.name} className="p-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-card)]">
+                    <span className="text-xs font-mono font-medium text-zinc-200 block">{item.name}</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)]">{item.desc}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="pt-2.5 border-t border-[var(--color-border)] flex flex-wrap items-center justify-center gap-4 text-[11px] font-mono text-[var(--color-text-muted)]">
+                <span>Write-Ahead Log (WAL)</span>
+                <span>·</span>
+                <span>Atomic Snapshots</span>
+                <span>·</span>
+                <span>Zero-Copy mmap</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -451,216 +662,155 @@ function ArchitectureSection() {
   );
 }
 
-/* ───────────────── Quickstart ───────────────── */
-function QuickstartSection() {
-  const [activeTab, setActiveTab] = useState("python");
+/* ═══════════════════════════════════════════
+   QUICKSTART (TABBED)
+   ═══════════════════════════════════════════ */
+
+function Quickstart() {
+  const [tab, setTab] = useState("python");
 
   const tabs = [
-    { id: "python", label: "Python Embedded", icon: "🐍" },
-    { id: "server", label: "REST API", icon: "🌐" },
-    { id: "langchain", label: "LangChain", icon: "🦜" },
+    { id: "python", label: "Python", filename: "example.py", lang: "python" },
+    { id: "api", label: "REST API", filename: "terminal.sh", lang: "bash" },
+    { id: "langchain", label: "LangChain", filename: "rag.py", lang: "python" },
   ];
 
-  const codeSnippets = {
+  const code = {
     python: `import vecta
 
-# Initialize 128-dimensional index with cosine similarity
+# Create a 128-d index with cosine similarity
 index = vecta.HnswIndex(dim=128, metric="cosine")
 
-# Insert vectors with unique IDs
-index.add(0, [0.1, 0.2, 0.8, 0.5, ...])  # 128-dim vector
-index.add(1, [0.9, 0.1, 0.2, 0.3, ...])
-index.add(2, [0.15, 0.25, 0.75, 0.55, ...])
+# Add vectors
+index.add(0, [0.1] * 128)
+index.add(1, [0.9] * 128)
+index.add(2, [0.5] * 128)
 
-# Search top-k nearest neighbors
-results = index.search(query=[0.12, 0.19, ...], k=5)
-for vector_id, distance in results:
-    print(f"ID: {vector_id}, Distance: {distance:.4f}")
+# Search
+results = index.search(query=[0.12] * 128, k=2)
+for id, dist in results:
+    print(f"  ID={id}, Distance={dist:.4f}")
 
-# Save index to disk
-index.save("my_index.bin")`,
+# Persist to disk
+index.save("my_index.vecta")`,
 
-    server: `# 1. Start the server
+    api: `# Start the server
 cargo run --release --bin vecta-server
-# Or: docker run -d -p 6333:6333 vecta
 
-# 2. Create a collection
+# Create a collection
 curl -X POST http://localhost:6333/collections \\
   -H "Authorization: Bearer my_secret_key" \\
   -H "Content-Type: application/json" \\
-  -d '{"name": "docs", "dim": 128, "index_type": "hnsw", "metric": "cosine"}'
+  -d '{"name":"docs","dim":128,"index_type":"hnsw","metric":"cosine"}'
 
-# 3. Insert a vector
+# Insert a vector
 curl -X POST http://localhost:6333/collections/docs/points \\
   -H "Authorization: Bearer my_secret_key" \\
   -H "Content-Type: application/json" \\
-  -d '{"id": 1, "vector": [0.1, 0.2, 0.8, 0.5, ...]}'
+  -d '{"id": 1, "vector": [0.1, 0.2, 0.8, 0.5]}'
 
-# 4. Search
+# Search
 curl -X POST http://localhost:6333/collections/docs/search \\
   -H "Authorization: Bearer my_secret_key" \\
   -H "Content-Type: application/json" \\
-  -d '{"vector": [0.12, 0.19, ...], "k": 5, "ef_search": 64}'`,
+  -d '{"vector": [0.12, 0.19, 0.78, 0.52], "k": 5}'`,
 
-    langchain: `from langchain_community.embeddings import OpenAIEmbeddings
+    langchain: `from vecta_client import VectaClient
 from vecta_client.langchain import VectaVectorStore
+from langchain_community.embeddings import OpenAIEmbeddings
 
-# 1. Connect to Vecta with an embedding model
+client = VectaClient("http://localhost:6333", api_key="secret")
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-vector_store = VectaVectorStore(
-    collection_name="knowledge_base",
-    embedding=embeddings,
-    base_url="http://localhost:6333",
-    api_key="my_secret_key"
-)
 
-# 2. Ingest documents
-vector_store.add_texts(
-    texts=["Vecta is a vector database built in Rust.",
-           "HNSW provides fast approximate nearest neighbor search."],
+client.create_collection("kb", dim=1536, index_type="hnsw", metric="cosine")
+
+store = VectaVectorStore(client=client, collection="kb", embedding=embeddings)
+
+store.add_texts(
+    texts=["Vecta is built in Rust.", "HNSW enables fast search."],
     metadatas=[{"topic": "overview"}, {"topic": "hnsw"}]
 )
 
-# 3. Use as a retriever in your RAG pipeline
-retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+retriever = store.as_retriever(search_kwargs={"k": 3})
 docs = retriever.invoke("How does vector search work?")`,
   };
 
-  return (
-    <section id="quickstart" className="relative py-28 px-6 bg-[var(--color-surface-alt)]">
-      <div className="max-w-4xl mx-auto">
-        <SectionHeader
-          eyebrow="Get Started"
-          title="Up and Running in Minutes"
-          description="Three ways to integrate Vecta into your application."
-        />
+  const currentTab = tabs.find((t) => t.id === tab) || tabs[0];
 
-        {/* Tabs */}
-        <div className="mt-14 flex flex-wrap gap-2 justify-center">
+  return (
+    <section id="quickstart" className="relative py-32 px-6 bg-[var(--color-surface-alt)]">
+      <div className="max-w-3xl mx-auto">
+        <div className="text-center mb-12">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-[var(--color-primary-light)] mb-3">Quickstart</p>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Up and running in minutes</h2>
+        </div>
+
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--color-surface-card)] border border-[var(--color-border)] w-fit mx-auto mb-8">
           {tabs.map((t) => (
             <button
               key={t.id}
-              onClick={() => setActiveTab(t.id)}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 cursor-pointer ${
-                activeTab === t.id
-                  ? "bg-[var(--color-primary)] text-white shadow-lg shadow-[var(--color-primary)]/25"
-                  : "glass text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-primary)]/40"
-              }`}
+              onClick={() => setTab(t.id)}
+              className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer ${tab === t.id
+                  ? "bg-[var(--color-text-primary)] text-[var(--color-surface)] shadow-sm"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+                }`}
             >
-              <span>{t.icon}</span>
               {t.label}
             </button>
           ))}
         </div>
 
-        {/* Code block */}
-        <div className="mt-8 code-block overflow-hidden glow-purple">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--color-border)]">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-red-500/60" />
-              <div className="w-3 h-3 rounded-full bg-yellow-500/60" />
-              <div className="w-3 h-3 rounded-full bg-emerald-500/60" />
-            </div>
-            <span className="text-xs text-[var(--color-text-muted)]">
-              {activeTab === "python" ? "example.py" : activeTab === "server" ? "terminal" : "rag_pipeline.py"}
-            </span>
-          </div>
-          <div className="p-5 overflow-x-auto">
-            <pre className="text-[var(--color-text-secondary)] text-sm leading-7">
-              <code>{codeSnippets[activeTab]}</code>
-            </pre>
-          </div>
-        </div>
+        {/* Code window with minimal theme syntax highlighting */}
+        <MinimalCodeWindow
+          code={code[tab]}
+          filename={currentTab.filename}
+          language={currentTab.lang}
+        />
       </div>
     </section>
   );
 }
 
-/* ───────────────── Index Comparison ───────────────── */
-function IndexComparisonSection() {
-  const indexes = [
-    {
-      name: "Flat",
-      emoji: "📋",
-      desc: "Exact exhaustive brute-force",
-      recall: "100%",
-      speed: "Baseline",
-      memory: "1.0×",
-      bestFor: "Ground truth, small datasets",
-      color: "from-blue-500/20 to-blue-600/5",
-    },
-    {
-      name: "IVF",
-      emoji: "📊",
-      desc: "Inverted file via k-means",
-      recall: "80–98%",
-      speed: "Fast",
-      memory: "1.0×",
-      bestFor: "Balanced speed & recall",
-      color: "from-emerald-500/20 to-emerald-600/5",
-    },
-    {
-      name: "HNSW",
-      emoji: "🕸️",
-      desc: "Hierarchical graph skip-lists",
-      recall: "90–99%",
-      speed: "Very Fast",
-      memory: "1.1–1.3×",
-      bestFor: "Low-latency, mission critical",
-      color: "from-violet-500/20 to-violet-600/5",
-    },
-    {
-      name: "IVFPQ",
-      emoji: "🗜️",
-      desc: "Product quantization + ADC",
-      recall: "50–70%",
-      speed: "Ultra Fast",
-      memory: "0.05×",
-      bestFor: "Huge datasets, tight RAM",
-      color: "from-amber-500/20 to-amber-600/5",
-    },
+/* ═══════════════════════════════════════════
+   API ENDPOINTS
+   ═══════════════════════════════════════════ */
+
+function APIEndpoints() {
+  const endpoints = [
+    { method: "GET", path: "/health", desc: "Server health check" },
+    { method: "POST", path: "/collections", desc: "Create a collection" },
+    { method: "GET", path: "/collections", desc: "List all collections" },
+    { method: "GET", path: "/collections/:name", desc: "Get collection info" },
+    { method: "DELETE", path: "/collections/:name", desc: "Delete a collection" },
+    { method: "POST", path: "/collections/:name/points", desc: "Insert a vector" },
+    { method: "POST", path: "/collections/:name/search", desc: "k-NN search" },
+    { method: "POST", path: "/collections/:name/checkpoint", desc: "Snapshot to disk" },
   ];
 
+  const methodColor = {
+    GET: "text-emerald-400 bg-emerald-400/8 border-emerald-400/20",
+    POST: "text-blue-400 bg-blue-400/8 border-blue-400/20",
+    DELETE: "text-red-400 bg-red-400/8 border-red-400/20",
+  };
+
   return (
-    <section className="relative py-28 px-6">
-      <div className="max-w-7xl mx-auto">
-        <SectionHeader
-          eyebrow="Index Types"
-          title="Choose Your Architecture"
-          description="Each algorithm trades off between recall accuracy, query speed, and memory usage."
-        />
+    <section className="relative py-32 px-6">
+      <div className="max-w-3xl mx-auto">
+        <div className="text-center mb-12">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-[var(--color-primary-light)] mb-3">REST API</p>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Clean, simple endpoints</h2>
+          <p className="text-sm text-[var(--color-text-muted)] mt-3">Interactive docs at <code className="text-[var(--color-accent-light)] text-xs font-mono">localhost:6333/docs</code></p>
+        </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mt-16">
-          {indexes.map((idx) => (
-            <div key={idx.name} className="hover-card glass rounded-2xl overflow-hidden group">
-              <div className={`h-1.5 bg-gradient-to-r ${idx.color}`} />
-              <div className="p-6">
-                <div className="text-3xl mb-3">{idx.emoji}</div>
-                <h3 className="text-lg font-bold mb-1">{idx.name}</h3>
-                <p className="text-xs text-[var(--color-text-muted)] mb-5">{idx.desc}</p>
-
-                <div className="space-y-3 text-sm">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[var(--color-text-muted)]">Recall</span>
-                    <span className="font-semibold text-[var(--color-text-primary)]">{idx.recall}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-[var(--color-text-muted)]">Speed</span>
-                    <span className="font-semibold text-[var(--color-text-primary)]">{idx.speed}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-[var(--color-text-muted)]">Memory</span>
-                    <span className="font-semibold text-emerald-400">{idx.memory}</span>
-                  </div>
-                </div>
-
-                <div className="mt-5 pt-4 border-t border-[var(--color-border)]/50">
-                  <p className="text-xs text-[var(--color-text-secondary)]">
-                    <span className="text-[var(--color-primary-light)] font-medium">Best for: </span>
-                    {idx.bestFor}
-                  </p>
-                </div>
-              </div>
+        <div className="rounded-2xl border border-[var(--color-border)] overflow-hidden divide-y divide-[var(--color-border)]">
+          {endpoints.map((e) => (
+            <div key={e.path + e.method} className="flex items-center gap-4 px-5 py-3 hover:bg-[var(--color-surface-hover)] transition-colors">
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${methodColor[e.method]} uppercase tracking-wider shrink-0 w-16 text-center`}>
+                {e.method}
+              </span>
+              <code className="text-sm font-mono text-[var(--color-text-primary)] flex-1">{e.path}</code>
+              <span className="text-xs text-[var(--color-text-muted)] hidden sm:block">{e.desc}</span>
             </div>
           ))}
         </div>
@@ -669,140 +819,95 @@ function IndexComparisonSection() {
   );
 }
 
-/* ───────────────── CTA / Footer ───────────────── */
-function CTASection() {
-  return (
-    <section className="relative py-28 px-6 overflow-hidden">
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full bg-[var(--color-primary)]/[0.06] blur-[120px]" />
-      </div>
+/* ═══════════════════════════════════════════
+   CTA
+   ═══════════════════════════════════════════ */
 
-      <div className="relative z-10 max-w-3xl mx-auto text-center">
-        <h2 className="text-3xl sm:text-4xl font-bold mb-5">
-          Ready to Build with <span className="gradient-text-static">Vecta</span>?
+function CTA() {
+  return (
+    <section className="relative py-32 px-6">
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[300px] rounded-full bg-[var(--color-primary)]/[0.03] blur-[120px] pointer-events-none" />
+
+      <div className="relative z-10 max-w-2xl mx-auto text-center">
+        <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">
+          Start building with Vecta
         </h2>
-        <p className="text-lg text-[var(--color-text-secondary)] mb-10">
-          Open source, MIT licensed, and ready for production. Start building your vector-powered application today.
+        <p className="text-sm text-[var(--color-text-muted)] mb-8 max-w-md mx-auto">
+          Open source, MIT licensed, production ready. Build your vector-powered application today.
         </p>
 
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
           <a
             href="https://github.com/dhanushkumar-amk/VECTA"
             target="_blank"
             rel="noopener noreferrer"
-            className="group px-8 py-4 rounded-xl font-semibold text-white bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] shadow-lg shadow-[var(--color-primary)]/20 hover:shadow-[var(--color-primary)]/40 transition-all duration-300 hover:scale-[1.03]"
+            className="group inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-[var(--color-text-primary)] text-[var(--color-surface)] text-sm font-semibold hover:opacity-90 transition-all"
           >
-            <span className="flex items-center gap-2">
-              <GithubIcon />
-              Star on GitHub
-              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" className="transition-transform duration-300 group-hover:translate-x-1">
-                <path d="M3 8h10M9 4l4 4-4 4" />
-              </svg>
-            </span>
+            <GithubIcon size={15} />
+            Star on GitHub
+            <span className="transition-transform duration-200 group-hover:translate-x-0.5"><ArrowRight size={14} /></span>
           </a>
-          <a
-            href="#quickstart"
-            className="px-8 py-4 rounded-xl font-semibold border border-[var(--color-border)] text-[var(--color-text-primary)] hover:border-[var(--color-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-300"
+          <Link
+            href="/docs"
+            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg border border-[var(--color-border)] text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-border-light)] transition-all"
           >
             Read the Docs
-          </a>
+          </Link>
         </div>
       </div>
     </section>
   );
 }
 
+/* ═══════════════════════════════════════════
+   FOOTER
+   ═══════════════════════════════════════════ */
+
 function Footer() {
   return (
-    <footer className="border-t border-[var(--color-border)] py-10 px-6">
-      <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <span className="text-xl">⚡</span>
-          <span className="font-semibold gradient-text-static">Vecta</span>
-          <span className="text-sm text-[var(--color-text-muted)]">— Built with 🦀 Rust</span>
+    <footer className="border-t border-[var(--color-border)] py-8 px-6">
+      <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]">
+          <span>⚡</span>
+          <span className="font-medium text-[var(--color-text-secondary)]">Vecta</span>
+          <span>·</span>
+          <span>Built with Rust</span>
         </div>
-        <div className="flex items-center gap-6">
-          <a href="https://github.com/dhanushkumar-amk/VECTA" target="_blank" rel="noopener noreferrer" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors">
-            <GithubIcon />
+        <div className="flex items-center gap-5 text-xs text-[var(--color-text-muted)]">
+          <a href="https://github.com/dhanushkumar-amk/VECTA" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--color-text-secondary)] transition-colors">
+            GitHub
           </a>
-          <span className="text-sm text-[var(--color-text-muted)]">
-            MIT License · © {new Date().getFullYear()} Dhanush Kumar
-          </span>
+          <Link href="/docs" className="hover:text-[var(--color-text-secondary)] transition-colors">
+            Documentation
+          </Link>
+          <span>MIT License © {new Date().getFullYear()}</span>
         </div>
       </div>
     </footer>
   );
 }
 
-/* ───────────────── Shared Components ───────────────── */
-function SectionHeader({ eyebrow, title, description }) {
-  return (
-    <div className="text-center max-w-2xl mx-auto">
-      <span className="inline-block text-xs font-semibold uppercase tracking-[0.2em] text-[var(--color-primary-light)] mb-3">
-        {eyebrow}
-      </span>
-      <h2 className="text-3xl sm:text-4xl font-bold mb-4">{title}</h2>
-      <p className="text-[var(--color-text-secondary)] leading-relaxed">{description}</p>
-    </div>
-  );
-}
+/* ═══════════════════════════════════════════
+   PAGE
+   ═══════════════════════════════════════════ */
 
-function CodeCopy({ text }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {}
-  };
-
-  return (
-    <div className="inline-flex items-center gap-3 px-5 py-3 rounded-xl bg-[var(--color-surface-card)] border border-[var(--color-border)] group">
-      <span className="text-[var(--color-text-muted)] text-sm select-none">$</span>
-      <code className="text-sm text-[var(--color-text-secondary)] font-mono">{text}</code>
-      <button
-        onClick={handleCopy}
-        className="ml-2 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-        title="Copy to clipboard"
-      >
-        {copied ? (
-          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-400">
-            <path d="M2 8l4 4 8-8" />
-          </svg>
-        ) : (
-          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-            <rect x="5" y="5" width="9" height="9" rx="1.5" />
-            <path d="M2 10V3a1 1 0 011-1h7" />
-          </svg>
-        )}
-      </button>
-    </div>
-  );
-}
-
-function GithubIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-    </svg>
-  );
-}
-
-/* ───────────────── Page ───────────────── */
 export default function Home() {
   return (
     <>
       <Navbar />
       <main>
-        <HeroSection />
-        <FeaturesSection />
-        <IndexComparisonSection />
-        <BenchmarksSection />
-        <ArchitectureSection />
-        <QuickstartSection />
-        <CTASection />
+        <Hero />
+        <div className="divider-glow" />
+        <Features />
+        <IndexTypes />
+        <div className="divider-glow" />
+        <Performance />
+        <Architecture />
+        <div className="divider-glow" />
+        <Quickstart />
+        <APIEndpoints />
+        <div className="divider-glow" />
+        <CTA />
       </main>
       <Footer />
     </>

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
+import { HighlightedCode } from "../components/CodeHighlight";
 
 /* ═══════════════════════════════════════════════════════════════
    DOCUMENTATION DATA — All docs content lives here
@@ -88,123 +89,149 @@ const SIDEBAR_SECTIONS = [
 
 function CodeBlock({ children, language = "", filename = "", showCopy = true }) {
   const [copied, setCopied] = useState(false);
+  const textContent = typeof children === "string" ? children : String(children || "");
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(children);
+      await navigator.clipboard.writeText(textContent.trim());
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {}
+    } catch { }
   };
 
   return (
-    <div className="group relative rounded-xl border border-[var(--color-border)] bg-[#0a0a18] overflow-hidden my-5">
-      {(filename || showCopy) && (
-        <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-card)]/50">
-          <div className="flex items-center gap-2">
-            <div className="flex gap-1.5">
-              <div className="w-2.5 h-2.5 rounded-full bg-red-500/50" />
-              <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/50" />
-              <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/50" />
-            </div>
-            {filename && (
-              <span className="text-xs text-[var(--color-text-muted)] ml-2 font-mono">
-                {filename}
-              </span>
-            )}
+    <div className="group relative rounded-xl border border-[var(--color-border)] bg-[#09090e] overflow-hidden my-5 shadow-lg">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[#0e0e14]">
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]/50" />
+            <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]/50" />
+            <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]/50" />
           </div>
-          {showCopy && (
-            <button
-              onClick={handleCopy}
-              className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
-              title="Copy"
-            >
-              {copied ? (
-                <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-400">
-                  <path d="M2 7l3 3 7-7" />
-                </svg>
-              ) : (
-                <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-                  <rect x="4" y="4" width="8" height="8" rx="1" />
-                  <path d="M2 9V2.5A.5.5 0 012.5 2H9" />
-                </svg>
-              )}
-            </button>
+          {filename && (
+            <span className="text-xs text-zinc-400 ml-2 font-mono flex items-center gap-1.5">
+              {filename}
+            </span>
           )}
         </div>
-      )}
-      <pre className="p-4 overflow-x-auto text-sm leading-relaxed font-mono text-[var(--color-text-secondary)]">
-        <code>{children}</code>
+
+        {showCopy && (
+          <button
+            onClick={handleCopy}
+            className="flex items-center gap-1.5 px-2 py-0.5 rounded text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 transition-all cursor-pointer"
+            title="Copy code"
+          >
+            {copied ? (
+              <>
+                <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-400">
+                  <path d="M2 6.5l3 3 5.5-5.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <span className="text-[11px] font-mono text-emerald-400">Copied</span>
+              </>
+            ) : (
+              <>
+                <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="4" y="4" width="6.5" height="6.5" rx="1.2" />
+                  <path d="M2.5 7.5V2.5A1 1 0 013.5 1.5H8.5" />
+                </svg>
+                <span className="text-[11px] font-mono text-zinc-400">Copy</span>
+              </>
+            )}
+          </button>
+        )}
+      </div>
+
+      <pre className="p-4 sm:p-5 overflow-x-auto text-xs sm:text-sm leading-relaxed font-mono selection:bg-indigo-500/20">
+        <code>
+          <HighlightedCode code={textContent} />
+        </code>
       </pre>
     </div>
   );
 }
 
 function Callout({ type = "note", children }) {
-  const styles = {
+  const configs = {
     note: {
-      border: "border-blue-500/30",
-      bg: "bg-blue-500/5",
-      icon: "ℹ️",
+      border: "border-l-2 border-indigo-500/80 bg-indigo-500/[0.03]",
+      titleColor: "text-indigo-400",
       title: "Note",
-      titleColor: "text-blue-400",
+      icon: (
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="16" x2="12" y2="12" />
+          <line x1="12" y1="8" x2="12.01" y2="8" />
+        </svg>
+      ),
     },
     tip: {
-      border: "border-emerald-500/30",
-      bg: "bg-emerald-500/5",
-      icon: "💡",
-      title: "Tip",
+      border: "border-l-2 border-emerald-500/80 bg-emerald-500/[0.03]",
       titleColor: "text-emerald-400",
+      title: "Tip",
+      icon: (
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path d="M9 18h6M10 22h4M12 2a7 7 0 00-7 7c0 2.5 1.5 4.5 3 5.5v1.5a1 1 0 001 1h6a1 1 0 001-1V14.5c1.5-1 3-3 3-5.5a7 7 0 00-7-7z" />
+        </svg>
+      ),
     },
     warning: {
-      border: "border-amber-500/30",
-      bg: "bg-amber-500/5",
-      icon: "⚠️",
-      title: "Warning",
+      border: "border-l-2 border-amber-500/80 bg-amber-500/[0.03]",
       titleColor: "text-amber-400",
+      title: "Warning",
+      icon: (
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          <line x1="12" y1="9" x2="12" y2="13" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+      ),
     },
     important: {
-      border: "border-purple-500/30",
-      bg: "bg-purple-500/5",
-      icon: "🔑",
-      title: "Important",
+      border: "border-l-2 border-purple-500/80 bg-purple-500/[0.03]",
       titleColor: "text-purple-400",
+      title: "Important",
+      icon: (
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 8v4M12 16h.01" />
+        </svg>
+      ),
     },
   };
 
-  const s = styles[type] || styles.note;
+  const c = configs[type] || configs.note;
 
   return (
-    <div className={`rounded-xl border ${s.border} ${s.bg} p-4 my-5`}>
-      <div className={`flex items-center gap-2 font-semibold text-sm ${s.titleColor} mb-2`}>
-        <span>{s.icon}</span>
-        {s.title}
+    <div className={`rounded-r-xl rounded-l-sm border border-[var(--color-border)] ${c.border} p-4 my-5`}>
+      <div className={`flex items-center gap-2 font-mono text-xs font-semibold ${c.titleColor} mb-1.5`}>
+        {c.icon}
+        <span>{c.title}</span>
       </div>
-      <div className="text-sm text-[var(--color-text-secondary)] leading-relaxed">{children}</div>
+      <div className="text-xs sm:text-sm text-zinc-300 leading-relaxed">{children}</div>
     </div>
   );
 }
 
 function ParamTable({ params }) {
   return (
-    <div className="rounded-xl border border-[var(--color-border)] overflow-hidden my-5">
-      <table className="w-full text-sm">
+    <div className="rounded-xl border border-[var(--color-border)] overflow-hidden my-5 bg-[#0a0a0f]">
+      <table className="w-full text-xs sm:text-sm">
         <thead>
-          <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-card)]/40">
-            <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)] font-medium">Parameter</th>
-            <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)] font-medium">Type</th>
-            <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)] font-medium">Description</th>
+          <tr className="border-b border-[var(--color-border)] bg-[#0e0e14]">
+            <th className="text-left px-4 py-3 text-[11px] font-mono uppercase tracking-wider text-zinc-500 font-medium">Parameter</th>
+            <th className="text-left px-4 py-3 text-[11px] font-mono uppercase tracking-wider text-zinc-500 font-medium">Type</th>
+            <th className="text-left px-4 py-3 text-[11px] font-mono uppercase tracking-wider text-zinc-500 font-medium">Description</th>
           </tr>
         </thead>
         <tbody>
           {params.map((p, i) => (
-            <tr key={i} className="border-b border-[var(--color-border)]/40 last:border-0">
-              <td className="px-4 py-2.5 font-mono text-[var(--color-accent-light)] text-xs">
+            <tr key={i} className="border-b border-[var(--color-border)]/50 last:border-0 hover:bg-zinc-900/30 transition-colors">
+              <td className="px-4 py-3 font-mono text-indigo-300 text-xs">
                 {p.name}
-                {p.required && <span className="text-red-400 ml-1">*</span>}
+                {p.required && <span className="text-rose-400 ml-1 font-bold">*</span>}
               </td>
-              <td className="px-4 py-2.5 font-mono text-[var(--color-text-muted)] text-xs">{p.type}</td>
-              <td className="px-4 py-2.5 text-[var(--color-text-secondary)]">{p.desc}</td>
+              <td className="px-4 py-3 font-mono text-zinc-500 text-xs">{p.type}</td>
+              <td className="px-4 py-3 text-zinc-300 leading-relaxed text-xs sm:text-sm">{p.desc}</td>
             </tr>
           ))}
         </tbody>
@@ -215,13 +242,13 @@ function ParamTable({ params }) {
 
 function MethodBadge({ method }) {
   const colors = {
-    GET: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-    POST: "bg-blue-500/15 text-blue-400 border-blue-500/30",
-    DELETE: "bg-red-500/15 text-red-400 border-red-500/30",
-    PUT: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+    GET: "bg-emerald-500/10 text-emerald-400 border-emerald-500/25",
+    POST: "bg-indigo-500/10 text-indigo-400 border-indigo-500/25",
+    DELETE: "bg-rose-500/10 text-rose-400 border-rose-500/25",
+    PUT: "bg-amber-500/10 text-amber-400 border-amber-500/25",
   };
   return (
-    <span className={`inline-flex px-2.5 py-0.5 rounded-md text-xs font-bold border ${colors[method] || ""}`}>
+    <span className={`inline-flex px-2 py-0.5 rounded text-[11px] font-mono font-bold border ${colors[method] || "text-zinc-300"}`}>
       {method}
     </span>
   );
@@ -229,11 +256,11 @@ function MethodBadge({ method }) {
 
 function EndpointHeader({ method, path, description }) {
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mb-4 p-4 rounded-xl bg-[var(--color-surface-card)] border border-[var(--color-border)]">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-4 p-3.5 rounded-xl bg-[#0b0b10] border border-[var(--color-border)]">
       <MethodBadge method={method} />
-      <code className="text-sm font-mono text-[var(--color-text-primary)]">{path}</code>
+      <code className="text-xs sm:text-sm font-mono font-medium text-zinc-200">{path}</code>
       {description && (
-        <span className="text-sm text-[var(--color-text-muted)] sm:ml-auto">{description}</span>
+        <span className="text-xs text-zinc-400 sm:ml-auto">{description}</span>
       )}
     </div>
   );
@@ -248,7 +275,7 @@ function Sidebar({ activeId, onNavigate, isOpen, onClose }) {
     <>
       {/* Mobile overlay */}
       {isOpen && (
-        <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={onClose} />
+        <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden" onClick={onClose} />
       )}
 
       <aside
@@ -257,41 +284,47 @@ function Sidebar({ activeId, onNavigate, isOpen, onClose }) {
         }`}
       >
         {/* Logo */}
-        <div className="sticky top-0 z-10 bg-[var(--color-surface)] border-b border-[var(--color-border)] px-5 py-4">
+        <div className="sticky top-0 z-10 bg-[var(--color-surface)]/95 backdrop-blur-md border-b border-[var(--color-border)] px-5 py-4 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2.5 group">
-            <span className="text-xl">⚡</span>
-            <span className="text-lg font-bold gradient-text-static tracking-tight">Vecta</span>
-            <span className="text-xs text-[var(--color-text-muted)] bg-[var(--color-surface-card)] px-2 py-0.5 rounded-full ml-1">
+            <span className="text-base">⚡</span>
+            <span className="text-sm font-bold tracking-tight text-white">Vecta</span>
+            <span className="text-[10px] font-mono text-zinc-500 border border-zinc-800 px-1.5 py-0.5 rounded">
               Docs
             </span>
+          </Link>
+          <Link href="/" className="text-xs text-zinc-500 hover:text-white transition-colors" title="Back to home">
+            ← Home
           </Link>
         </div>
 
         <nav className="p-4 pb-24">
           {SIDEBAR_SECTIONS.map((section) => (
             <div key={section.title} className="mb-6">
-              <h3 className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--color-text-muted)] mb-2 px-2">
+              <h3 className="text-[10px] font-mono font-semibold uppercase tracking-[0.18em] text-zinc-500 mb-2 px-2.5">
                 {section.title}
               </h3>
               <ul className="space-y-0.5">
-                {section.items.map((item) => (
-                  <li key={item.id}>
-                    <a
-                      href={`#${item.id}`}
-                      onClick={(e) => {
-                        onNavigate(item.id);
-                        onClose();
-                      }}
-                      className={`block px-3 py-1.5 rounded-lg text-sm transition-all duration-200 ${
-                        activeId === item.id
-                          ? "bg-[var(--color-primary)]/10 text-[var(--color-primary-light)] font-medium border-l-2 border-[var(--color-primary)]"
-                          : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]"
-                      }`}
-                    >
-                      {item.label}
-                    </a>
-                  </li>
-                ))}
+                {section.items.map((item) => {
+                  const isActive = activeId === item.id;
+                  return (
+                    <li key={item.id}>
+                      <a
+                        href={`#${item.id}`}
+                        onClick={() => {
+                          onNavigate(item.id);
+                          onClose();
+                        }}
+                        className={`block px-2.5 py-1.5 rounded-lg text-xs transition-all duration-150 ${
+                          isActive
+                            ? "bg-zinc-800/80 text-white font-medium border border-zinc-700/60 shadow-sm"
+                            : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/40"
+                        }`}
+                      >
+                        {item.label}
+                      </a>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ))}
@@ -310,25 +343,28 @@ function TableOfContents({ headings, activeId }) {
 
   return (
     <aside className="hidden xl:block w-56 shrink-0">
-      <div className="sticky top-8 pl-6 border-l border-[var(--color-border)]">
-        <h4 className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--color-text-muted)] mb-3">
+      <div className="sticky top-20 pl-6 border-l border-[var(--color-border)]">
+        <h4 className="text-[10px] font-mono font-semibold uppercase tracking-[0.18em] text-zinc-500 mb-3">
           On This Page
         </h4>
-        <ul className="space-y-1.5">
-          {headings.map((h) => (
-            <li key={h.id}>
-              <a
-                href={`#${h.id}`}
-                className={`block text-xs transition-colors duration-200 ${
-                  activeId === h.id
-                    ? "text-[var(--color-primary-light)] font-medium"
-                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
-                }`}
-              >
-                {h.label}
-              </a>
-            </li>
-          ))}
+        <ul className="space-y-1.5 text-xs">
+          {headings.map((h) => {
+            const isActive = activeId === h.id;
+            return (
+              <li key={h.id}>
+                <a
+                  href={`#${h.id}`}
+                  className={`block truncate transition-colors duration-150 ${
+                    isActive
+                      ? "text-indigo-300 font-medium translate-x-0.5"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  {h.label}
+                </a>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </aside>
@@ -1578,32 +1614,32 @@ export default function DocsPage() {
 
       <div className="flex-1 min-w-0">
         {/* Top bar */}
-        <header className="sticky top-0 z-30 glass-strong border-b border-[var(--color-border)] px-6 py-3 flex items-center gap-4">
+        <header className="sticky top-0 z-30 glass-nav border-b border-[var(--color-border)] px-6 py-2.5 flex items-center gap-4">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="lg:hidden text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
+            className="lg:hidden text-[var(--color-text-muted)] hover:text-white cursor-pointer p-1"
             aria-label="Toggle sidebar"
           >
-            <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
           <SearchBar />
-          <div className="hidden sm:flex items-center gap-3 ml-auto">
+          <div className="hidden sm:flex items-center gap-4 ml-auto">
             <a
               href="https://github.com/dhanushkumar-amk/VECTA"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+              className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
               </svg>
               GitHub
             </a>
             <Link
               href="/"
-              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+              className="text-xs text-zinc-400 hover:text-white transition-colors"
             >
               ← Home
             </Link>
