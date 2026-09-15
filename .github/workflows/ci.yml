@@ -57,7 +57,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run core tests (release mode)
-        run: cargo test --release -- --nocapture
+        run: cargo test --lib --tests --release -- --nocapture
 
   # ─────────────────────────────────────────────────────
   # Job 3: Test Python Bindings

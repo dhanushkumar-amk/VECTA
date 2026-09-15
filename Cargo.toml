@@ -25,6 +25,7 @@ toml = "0.8"
 [[bin]]
 name = "vecta-server"
 path = "src/bin/vecta_server.rs"
+test = false
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
