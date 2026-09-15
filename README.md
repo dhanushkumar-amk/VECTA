@@ -2,14 +2,15 @@
 
 # ⚡ Vecta
 
-**A fast, production-grade vector search engine built from scratch in pure Rust with Python bindings, Axum REST API server, and Docker deployment.**
+**A fast, production-grade vector search engine built from scratch in pure Rust with Python bindings, Axum REST API server, Docker deployment, and Next.js documentation portal.**
 
+[![Release](https://img.shields.io/github/v/release/dhanushkumar-amk/VECTA?color=blue)](https://github.com/dhanushkumar-amk/VECTA/releases)
 [![CI](https://github.com/dhanushkumar-amk/VECTA/actions/workflows/ci.yml/badge.svg)](https://github.com/dhanushkumar-amk/VECTA/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
-[![API Docs](https://img.shields.io/badge/OpenAPI-3.0.3-brightgreen.svg)](http://localhost:6333/docs)
+[![OpenAPI](https://img.shields.io/badge/OpenAPI-3.0.3-brightgreen.svg)](http://localhost:6333/docs)
 
 <br/>
 
@@ -23,13 +24,17 @@
 
 **Vecta** is an open-source vector database engine designed and implemented from first principles in pure Rust. It implements four core vector indexing algorithms—brute-force Flat, coarse-quantized Inverted File (IVF), Hierarchical Navigable Small World graphs (HNSW), and Product Quantization (IVFPQ)—with zero external C/C++ dependencies.
 
-Vecta operates in two complementary execution modes: as an **embedded in-process library** via PyO3 CPython bindings with GIL-released concurrency, and as a **standalone REST API microservice** (`vecta-server`) built on Axum and Tokio with Write-Ahead Logging (WAL) crash durability, API key authentication, and interactive Swagger UI documentation.
+Vecta operates in two complementary execution modes:
+1. **Embedded in-process library**: Native PyO3 CPython bindings with GIL-released concurrency and zero-copy NumPy interoperability.
+2. **Standalone REST API microservice (`vecta-server`)**: Built on Axum and Tokio with Write-Ahead Logging (WAL) crash durability, API key authentication, interactive Swagger UI documentation, and Docker support.
+
+It also includes a modern, minimal **Next.js web portal and documentation site** in `website/` with full interactive guides, API references, code snippets, and architecture visualizations.
 
 ---
 
 ## ⚖️ Embedded vs. Server: Which Should You Use?
 
-Vecta’s architecture separates algorithmic indexing primitives (`src/core/`) from presentation surfaces. Both the embedded Python module and the standalone HTTP server consume the exact same underlying Rust core.
+Vecta’s architecture cleanly separates algorithmic indexing primitives (`src/core/`) from presentation surfaces. Both the embedded Python module and the standalone HTTP server consume the exact same underlying Rust core.
 
 | Dimension | Embedded Mode (`import vecta`) | Standalone Server (`vecta-server`) |
 | :--- | :--- | :--- |
@@ -39,16 +44,32 @@ Vecta’s architecture separates algorithmic indexing primitives (`src/core/`) f
 | **Call Latency** | Sub-microsecond (direct FFI function calls) | ~0.3 – 1.0 ms (loopback HTTP serialization + network stack) |
 | **Durability Model** | Explicit manual snapshot saving (`.save()`) | Continuous Write-Ahead Log (WAL) + auto recovery on startup |
 | **Concurrency** | `parking_lot::RwLock` + explicit GIL release | Multi-threaded Tokio async reactor + concurrent collections |
-| **Operational Scope** | Single machine, single process | Multi-tenant, containerized microservice, Kubernetes / Cloud |
-| **Best Used For** | Local ML pipelines, notebook research, edge inference | Microservices, polyglot applications, production deployments |
+| **Operational Scope** | Local ML pipelines, notebook research, edge inference | Multi-tenant microservice, Kubernetes, Docker, cloud |
+
+---
+
+## 📦 Installation
+
+### Prebuilt Wheels (GitHub Releases)
+Download prebuilt wheels for Python 3.9 – 3.12 (Linux, macOS, Windows) directly from the [v1.0.0 GitHub Releases](https://github.com/dhanushkumar-amk/VECTA/releases/tag/v1.0.0):
+
+```bash
+# Install directly from the release wheel
+pip install https://github.com/dhanushkumar-amk/VECTA/releases/download/v1.0.0/vecta-1.0.0-cp311-cp311-win_amd64.whl
+```
+
+### Build from Source
+```bash
+# Requires Rust 1.75+ and Python 3.9+
+pip install maturin
+maturin develop --release
+```
 
 ---
 
 ## 🚀 Quickstarts
 
 ### 1. Quickstart — Embedded (Python)
-
-Install the compiled library via `maturin develop --release` or prebuilt wheels, then index and search in 5 lines of code:
 
 ```python
 import vecta
@@ -76,6 +97,11 @@ docker build -t vecta .
 docker run -d -p 6333:6333 -v $(pwd)/data:/data -e VECTA_API_KEY=my_secret_key vecta
 ```
 
+#### Run with Docker Compose:
+```bash
+docker-compose up -d
+```
+
 #### Run with Cargo:
 ```bash
 cargo run --release --bin vecta-server
@@ -83,7 +109,6 @@ cargo run --release --bin vecta-server
 ```
 
 #### Interacting via cURL:
-
 ```bash
 # 1. Check server health
 curl http://localhost:6333/health
@@ -111,7 +136,7 @@ curl -X POST http://localhost:6333/collections/documents/search \
 
 ### 3. Python Client SDK
 
-Vecta includes a pure-Python, zero-dependency client in `clients/python/`:
+A zero-dependency Python client is included in `clients/python/`:
 
 ```python
 from vecta_client import VectaClient
@@ -126,6 +151,25 @@ client.insert_point(name="kb", point_id=1, vector=[0.1] * 128)
 matches = client.search(name="kb", vector=[0.1] * 128, k=5)
 print(f"Found {len(matches)} matches: {matches}")
 ```
+
+---
+
+### 4. Documentation & Landing Website (`website/`)
+
+Vecta includes a modern Next.js 16 documentation and landing page:
+
+```bash
+cd website
+npm install
+npm run dev
+# Open http://localhost:3000 for the landing page
+# Open http://localhost:3000/docs for the comprehensive documentation
+```
+
+To deploy on Vercel:
+- Import your repository on [vercel.com](https://vercel.com).
+- Set **Root Directory** to `website`.
+- Framework preset auto-detects **Next.js** and deploys instantly.
 
 ---
 
@@ -177,79 +221,6 @@ Vecta's pure-Rust engine closely tracks FAISS across exact Flat, IVF, and HNSW r
  IVFPQ (M=8,k=256)  | vecta   | 6,541.9 ms   | 16,781.7         | VECTA 1.04x   | 59.8%       | 262.3 KB         | 19.52x smaller
                     | FAISS   | 875.0 ms     | 16,151.7         | baseline      | 64.4%       | 343.3 KB         | 14.92x smaller
 ======================================================================================================================
-```
-
----
-
-### Detailed Architecture Analysis
-
-#### 1. Inverted File Index (IVF)
-<div align="center">
-<img src="benchmarks/charts/recall_qps_ivf.png" width="750" alt="IVF Recall vs. QPS" />
-</div>
-
-*Commentary*: On coarse centroid partitioning ($nlist=100$), Vecta achieves **19,408 QPS at 89.2% recall** ($nprobe=5$) and climbs to **98.0% recall** at $nprobe=10$ (10,745 QPS). FAISS maintains a ~3.5x throughput edge via AVX2-vectorized inner distance routines during posting-list scans.
-
-#### 2. Hierarchical Navigable Small World (HNSW)
-<div align="center">
-<img src="benchmarks/charts/recall_qps_hnsw.png" width="750" alt="HNSW Recall vs. QPS" />
-</div>
-
-*Commentary*: Vecta's pure-Rust graph skip-list delivers **25,967 QPS** at $ef\_search=10$ (82.2% recall) and **7,252 QPS** at $ef\_search=80$ (88.9% recall). FAISS leads in beam traversal speed due to software cache prefetching (`_mm_prefetch`) and contiguous flat neighbor array memory layouts.
-
-#### 3. Inverted File with Product Quantization (IVFPQ)
-<div align="center">
-<img src="benchmarks/charts/recall_qps_ivfpq.png" width="750" alt="IVFPQ Recall vs. QPS" />
-</div>
-
-*Commentary*: Vecta's cache-aligned Asymmetric Distance Computation (ADC) table lookup is exceptionally efficient. At $nprobe=1$, Vecta processes **45,780 QPS**. At $nprobe=50$, Vecta's subvector accumulation loop overtakes FAISS (**16,782 vs. 16,152 QPS**, a **1.04x speedup**).
-
----
-
-### Throughput at Matched Accuracy (~90% Recall Target)
-
-<div align="center">
-<img src="benchmarks/charts/qps_at_90pct_recall.png" width="750" alt="Throughput at Matched Recall" />
-</div>
-
-*Commentary*: Iso-recall comparison demonstrates real-world operational throughput when accuracy requirements are fixed. At ~90% recall, Vecta serves **19,408 QPS** on IVF, **7,252 QPS** on HNSW, and **1,413 QPS** on exhaustive Flat search.
-
----
-
-### Index Construction & Training Time
-
-<div align="center">
-<img src="benchmarks/charts/build_time_comparison.png" width="750" alt="Index Construction Time" />
-</div>
-
-*Commentary*: Vecta builds unindexed Flat datasets in **20.8 ms**, IVF in **1.93 s**, HNSW graphs in **2.16 s**, and IVFPQ codebooks in **6.54 s**. FAISS trains k-means centroids faster primarily by utilizing multi-threaded OpenMP parallelism and AVX-512 distance accumulation during Lloyd's iterations.
-
----
-
-### Memory Footprint & Compression
-
-<div align="center">
-<img src="benchmarks/charts/memory_comparison.png" width="750" alt="Memory Footprint & Compression" />
-</div>
-
-*Commentary*: While uncompressed indexes (Flat, IVF, HNSW) require 5.12 MB to 6.14 MB in resident RAM, Vecta's IVFPQ compresses the entire 10,000-vector dataset into just **262.3 KB**—an astounding **$19.52\times$ memory reduction** (compared to FAISS's 343.3 KB / $14.92\times$ compression) while finding high-quality approximate nearest neighbors.
-
----
-
-### Methodology & Reproducibility
-
-Full benchmarking protocols, hardware specifications, single-threaded isolation settings, and iso-recall interpolation mathematics are detailed in the [Methodology Specification](benchmarks/faiss_comparison/methodology.md).
-
-To regenerate all benchmark visualizations from saved results:
-```bash
-python benchmarks/visualize_results.py
-```
-
-To run the complete FAISS comparison benchmark suite from scratch:
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r benchmarks/requirements.txt
-python benchmarks/faiss_comparison/run_comparison.py --dataset siftsmall --summary
 ```
 
 ---
@@ -328,12 +299,12 @@ for doc in relevant_docs:
 
 ---
 
-## ⚠️ Known Limitations (v0.1.0)
+## ⚠️ Known Limitations (v1.0.0)
 
-In keeping with engineering honesty, the following constraints are documented for v0.1.0:
+In keeping with engineering honesty, the following constraints are documented for v1.0.0:
 
 1. **IVFPQ Metric Support**: `IVFPQIndex` currently supports Euclidean ($L_2$) distance. Cosine and Dot Product metrics are not yet supported for Product Quantization.
-2. **Single-Threaded HNSW Construction**: HNSW graph insertion executes sequentially on a single thread. Parallel graph construction is slated for v0.2.0.
+2. **Single-Threaded HNSW Construction**: HNSW graph insertion executes sequentially on a single thread. Parallel graph construction is slated for future minor releases.
 3. **WAL Durability Scope**: Crash-durable Write-Ahead Logging is currently wired for `FlatIndex`. HNSW, IVF, and IVFPQ collections persist via explicit snapshot checkpointing (`POST /collections/{name}/checkpoint`) and graceful shutdown signal handlers.
 4. **Standalone Server Sharding**: Distributed network clustering is in active design; horizontal sharding is currently provided via the in-process `ShardedFlatIndex`.
 
@@ -353,7 +324,7 @@ cargo test --test server_tests --test auth_docs_tests --test persistence_server_
 # Run Python client & LangChain tests
 pytest clients/python/tests/ -v
 
-# Run embedded PyO3 test suite (175 tests)
+# Run embedded PyO3 test suite
 pytest tests/python/ -v
 ```
 
