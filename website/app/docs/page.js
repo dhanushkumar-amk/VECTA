@@ -334,42 +334,6 @@ function Sidebar({ activeId, onNavigate, isOpen, onClose }) {
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   TABLE OF CONTENTS (right side)
-   ═══════════════════════════════════════════════════════════════ */
-
-function TableOfContents({ headings, activeId }) {
-  if (!headings || headings.length === 0) return null;
-
-  return (
-    <aside className="hidden xl:block w-56 shrink-0">
-      <div className="sticky top-20 pl-6 border-l border-[var(--color-border)]">
-        <h4 className="text-[10px] font-mono font-semibold uppercase tracking-[0.18em] text-zinc-500 mb-3">
-          On This Page
-        </h4>
-        <ul className="space-y-1.5 text-xs">
-          {headings.map((h) => {
-            const isActive = activeId === h.id;
-            return (
-              <li key={h.id}>
-                <a
-                  href={`#${h.id}`}
-                  className={`block truncate transition-colors duration-150 ${
-                    isActive
-                      ? "text-indigo-300 font-medium translate-x-0.5"
-                      : "text-zinc-500 hover:text-zinc-300"
-                  }`}
-                >
-                  {h.label}
-                </a>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-    </aside>
-  );
-}
 
 /* ═══════════════════════════════════════════════════════════════
    SEARCH BAR
@@ -1601,8 +1565,6 @@ export default function DocsPage() {
     return () => observer.disconnect();
   }, []);
 
-  const allItems = SIDEBAR_SECTIONS.flatMap((s) => s.items);
-
   return (
     <div className="flex min-h-screen">
       <Sidebar
@@ -1647,16 +1609,9 @@ export default function DocsPage() {
         </header>
 
         {/* Content area */}
-        <div className="flex max-w-6xl mx-auto px-6 sm:px-10 py-10">
-          <main className="flex-1 min-w-0">
-            <DocsContent />
-          </main>
-
-          <TableOfContents
-            headings={allItems}
-            activeId={activeId}
-          />
-        </div>
+        <main className="max-w-4xl mx-auto px-6 sm:px-12 py-10">
+          <DocsContent />
+        </main>
       </div>
     </div>
   );
