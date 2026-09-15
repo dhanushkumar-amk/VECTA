@@ -53,10 +53,7 @@ async fn test_01_manual_checkpoint_and_restart_restores_data() {
     assert_eq!(resp.status(), reqwest::StatusCode::CREATED);
 
     // 3. Insert points
-    let points: Vec<(u64, Vec<f32>)> = vec![
-        (100, vec![1.0, 2.0]),
-        (200, vec![3.0, 4.0]),
-    ];
+    let points: Vec<(u64, Vec<f32>)> = vec![(100, vec![1.0, 2.0]), (200, vec![3.0, 4.0])];
     for (id, vec) in points {
         client
             .post(format!("{}/collections/persistent_flat/points", base_url1))
@@ -68,7 +65,10 @@ async fn test_01_manual_checkpoint_and_restart_restores_data() {
 
     // 4. Call checkpoint endpoint
     let cp_resp = client
-        .post(format!("{}/collections/persistent_flat/checkpoint", base_url1))
+        .post(format!(
+            "{}/collections/persistent_flat/checkpoint",
+            base_url1
+        ))
         .send()
         .await
         .unwrap();

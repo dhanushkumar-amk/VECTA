@@ -97,11 +97,7 @@ impl AppState {
             Ok(map) => {
                 let count = map.len();
                 if count > 0 {
-                    println!(
-                        "Restored {} collections from {}",
-                        count,
-                        data_dir.display()
-                    );
+                    println!("Restored {} collections from {}", count, data_dir.display());
                 }
                 map
             }
@@ -133,7 +129,11 @@ impl AppState {
     }
 
     /// Save a snapshot of a specific collection to disk.
-    pub fn save_collection_snapshot(&self, name: &str, index: &CollectionIndex) -> Result<(), String> {
+    pub fn save_collection_snapshot(
+        &self,
+        name: &str,
+        index: &CollectionIndex,
+    ) -> Result<(), String> {
         let path = self.collection_file_path(name);
         match index {
             CollectionIndex::Flat(idx) => {
@@ -151,9 +151,8 @@ impl AppState {
                 save_hnsw_index(idx, &config, &path)
                     .map_err(|e| format!("save_hnsw_index failed: {}", e))
             }
-            CollectionIndex::IvfPq(idx) => {
-                save_ivf_pq_index(idx, &path).map_err(|e| format!("save_ivf_pq_index failed: {}", e))
-            }
+            CollectionIndex::IvfPq(idx) => save_ivf_pq_index(idx, &path)
+                .map_err(|e| format!("save_ivf_pq_index failed: {}", e)),
         }
     }
 
@@ -175,8 +174,9 @@ impl AppState {
         if let CollectionIndex::Flat(_) = index {
             let wal_path = self.wal_file_path(name);
             if wal_path.exists() {
-                File::create(&wal_path)
-                    .map_err(|e| format!("failed to truncate WAL file {}: {}", wal_path.display(), e))?;
+                File::create(&wal_path).map_err(|e| {
+                    format!("failed to truncate WAL file {}: {}", wal_path.display(), e)
+                })?;
             }
         }
 
@@ -213,8 +213,13 @@ impl AppState {
             return Ok(map);
         }
 
-        let read_dir = std::fs::read_dir(data_dir)
-            .map_err(|e| format!("failed to read data directory {}: {}", data_dir.display(), e))?;
+        let read_dir = std::fs::read_dir(data_dir).map_err(|e| {
+            format!(
+                "failed to read data directory {}: {}",
+                data_dir.display(),
+                e
+            )
+        })?;
 
         for entry_res in read_dir {
             let entry = entry_res.map_err(|e| format!("directory entry error: {}", e))?;

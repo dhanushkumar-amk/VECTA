@@ -111,7 +111,10 @@ async fn test_03_create_duplicate_collection_returns_409() {
     assert_eq!(resp2.status(), reqwest::StatusCode::CONFLICT);
 
     let err_body: serde_json::Value = resp2.json().await.expect("json parse failed");
-    assert!(err_body["error"].as_str().unwrap().contains("already exists"));
+    assert!(err_body["error"]
+        .as_str()
+        .unwrap()
+        .contains("already exists"));
 }
 
 #[tokio::test]
@@ -284,7 +287,10 @@ async fn test_07_insert_dimension_mismatch_returns_400_and_survives() {
 
     assert_eq!(bad_resp.status(), reqwest::StatusCode::BAD_REQUEST);
     let bad_err: serde_json::Value = bad_resp.json().await.unwrap();
-    assert!(bad_err["error"].as_str().unwrap().contains("dimension mismatch"));
+    assert!(bad_err["error"]
+        .as_str()
+        .unwrap()
+        .contains("dimension mismatch"));
 
     // Send a SECOND request (valid 2D vector) to prove server did NOT crash
     let valid_payload = serde_json::json!({

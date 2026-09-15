@@ -16,6 +16,9 @@ jobs:
   lint:
     name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -40,6 +43,9 @@ jobs:
   test-core:
     name: Test Core (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: true
       matrix:
@@ -64,6 +70,9 @@ jobs:
     name: Python Bindings (${{ matrix.os }}, py${{ matrix.python-version }})
     needs: test-core
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: true
       matrix:

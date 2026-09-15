@@ -31,7 +31,11 @@ async fn test_01_unset_api_key_allows_unauthenticated_requests() {
     let client = reqwest::Client::new();
 
     // Health works
-    let h_resp = client.get(format!("{}/health", base_url)).send().await.unwrap();
+    let h_resp = client
+        .get(format!("{}/health", base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(h_resp.status(), reqwest::StatusCode::OK);
 
     // Create collection works without auth
@@ -49,7 +53,11 @@ async fn test_01_unset_api_key_allows_unauthenticated_requests() {
     assert_eq!(create_resp.status(), reqwest::StatusCode::CREATED);
 
     // List collections works without auth
-    let list_resp = client.get(format!("{}/collections", base_url)).send().await.unwrap();
+    let list_resp = client
+        .get(format!("{}/collections", base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(list_resp.status(), reqwest::StatusCode::OK);
 }
 
@@ -123,7 +131,11 @@ async fn test_05_health_is_always_open_even_with_api_key_set() {
     let client = reqwest::Client::new();
 
     // No Authorization header
-    let resp = client.get(format!("{}/health", base_url)).send().await.unwrap();
+    let resp = client
+        .get(format!("{}/health", base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");

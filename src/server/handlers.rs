@@ -185,8 +185,8 @@ pub async fn create_collection_handler(
                 max_iterations: 100,
             };
             let num_clusters = 4;
-            let ivf_pq = IVFPQIndex::new(req.dim, num_clusters, pq_config)
-                .map_err(|e| AppError::BadRequest(e))?;
+            let ivf_pq =
+                IVFPQIndex::new(req.dim, num_clusters, pq_config).map_err(AppError::BadRequest)?;
             CollectionIndex::IvfPq(ivf_pq)
         }
         _ => {
@@ -440,7 +440,7 @@ pub async fn insert_point_handler(
             };
             let mut rng = rand::thread_rng();
             crate::core::hnsw::insert::insert(graph, req.id, &req.vector, &config, &mut rng)
-                .map_err(|e| AppError::BadRequest(e))?;
+                .map_err(AppError::BadRequest)?;
             Ok(StatusCode::CREATED)
         }
         CollectionIndex::Ivf(_) => Err(AppError::BadRequest(
@@ -542,7 +542,7 @@ pub async fn search_handler(
             let nprobe = req.nprobe.unwrap_or(1);
             let scored = ivfpq
                 .search(&req.vector, req.k, nprobe)
-                .map_err(|e| AppError::BadRequest(e))?;
+                .map_err(AppError::BadRequest)?;
             scored
                 .into_iter()
                 .map(|s| SearchResultItem {

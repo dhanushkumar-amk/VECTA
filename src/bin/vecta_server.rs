@@ -33,7 +33,10 @@ async fn shutdown_signal(state: Arc<AppState>) {
 
     println!("Graceful shutdown initiated: checkpointing all collections to disk...");
     match state.checkpoint_all() {
-        Ok(count) => println!("Successfully checkpointed {} collections before exit.", count),
+        Ok(count) => println!(
+            "Successfully checkpointed {} collections before exit.",
+            count
+        ),
         Err(e) => eprintln!("Error checkpointing collections during shutdown: {}", e),
     }
 }
