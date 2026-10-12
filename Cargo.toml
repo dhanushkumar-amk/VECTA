@@ -1,6 +1,6 @@
 [package]
 name = "vecta"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "A production-grade vector database built from scratch in Rust, benchmarked against FAISS"
 

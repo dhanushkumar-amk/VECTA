@@ -2,6 +2,26 @@
 
 All notable milestones and architectural developments for the **Vecta** vector database engine are documented below across its 40-phase construction.
 
+## [v1.1.0] - 2026-10-12: Zero-Trust Cybersecurity Hardening & Visual Vector Architecture Suite
+
+### 🛡️ Zero-Trust Cybersecurity & Attack Prevention
+- **Constant-Time Authentication (CWE-208 / CWE-385)**: Implemented `constant_time_compare()` byte-level XOR accumulator in `auth_middleware`, eliminating microsecond timing side-channel leakage on Bearer API token validation.
+- **Path Traversal & Filesystem Hardening (CWE-22 / CWE-73)**: Added strict collection name whitelisting (`[a-zA-Z0-9_-]`, 64-character limit, rejecting dot prefixes) and sandboxed path resolution using `Path::file_name` in `AppState` to prevent arbitrary file deletion and checkpoint overwrite attacks.
+- **Adversarial Non-Finite Vector Poisoning Prevention (CWE-20)**: Enforced strict IEEE 754 `.is_finite()` validation across all vector components on both ingestion (`POST /points`) and query (`POST /search`) endpoints, preventing NaN and Infinity float arithmetic poisoning.
+- **Algorithmic Complexity DoS Guardrails (CWE-400)**: Enforced strict bounded parameter limits: $K \le 10,000$, `ef_search` $\le 2,048$, and dimension $D \le 65,536$, protecting CPU scheduling and heap memory from denial-of-service starvation.
+
+### 🎨 Visual Architecture & Benchmark Infographics Suite
+- Created a complete suite of clean, modern 2D digital vector graphic infographics in the `algomaster.io` systems architecture aesthetic:
+  - **High-Level Design (HLD)** (`assets/vecta_hld.png`): Client Layer $\to$ Ingress Gateways $\to$ Core Engines $\to$ Durability Layer.
+  - **Low-Level Design (LLD)** (`assets/vecta_lld.png`): Memory layouts, rounded bit-array buffers, multi-tier HNSW graph layers, and 21-byte WAL binary record frames.
+  - **Life of a Vector Workflows** (`assets/vecta_pipeline.png`): Side-by-side swimlanes for Write / Ingestion and Read / Query search pipelines.
+  - **Master Head-to-Head Comparison Table** (`assets/vecta_master_table.png`): Digital vector comparison table with winner badges for Vecta's 16,782 QPS and 262 KB footprint.
+  - **Benchmark Showdown Infographic** (`assets/vecta_benchmark.png`): Multi-card memory compression and QPS bar charts.
+  - **Cybersecurity Defense Matrix** (`assets/vecta_cybersecurity.png`): 6 attack vectors mapped to 6 defensive gates with Zero-Trust shield badge.
+
+### 📖 README.md Complete Redesign
+- Redesigned the primary repository documentation with an executive performance scorecard, interactive navigation links, clear architecture breakdowns, and comprehensive developer quickstarts.
+
 ---
 
 ## [v0.1.0] - Initial Release (The 40-Phase Capstone)

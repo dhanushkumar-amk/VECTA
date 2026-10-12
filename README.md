@@ -210,11 +210,11 @@ Vector databases face distinct attack surfaces ranging from side-channel attacks
 ## 📦 Installation
 
 ### 1. Prebuilt Wheels (GitHub Releases)
-Download prebuilt wheels for Python 3.9 – 3.12 (Linux, macOS, Windows) directly from the [v1.0.0 GitHub Releases](https://github.com/dhanushkumar-amk/VECTA/releases/tag/v1.0.0):
+Download prebuilt wheels for Python 3.9 – 3.12 (Linux, macOS, Windows) directly from the [v1.1.0 GitHub Releases](https://github.com/dhanushkumar-amk/VECTA/releases/tag/v1.1.0):
 
 ```bash
 # Install directly from the release wheel
-pip install https://github.com/dhanushkumar-amk/VECTA/releases/download/v1.0.0/vecta-1.0.0-cp311-cp311-win_amd64.whl
+pip install https://github.com/dhanushkumar-amk/VECTA/releases/download/v1.1.0/vecta-1.1.0-cp311-cp311-win_amd64.whl
 ```
 
 ### 2. Build from Source
@@ -364,9 +364,9 @@ To deploy on Vercel:
 
 ---
 
-## ⚠️ Known Limitations (v1.0.0)
+## ⚠️ Known Limitations (v1.1.0)
 
-In keeping with engineering honesty, the following constraints are documented for v1.0.0:
+In keeping with engineering honesty, the following constraints are documented for v1.1.0:
 
 1. **IVFPQ Metric Support**: `IVFPQIndex` currently supports Euclidean ($L_2$) distance. Cosine and Dot Product metrics are slated for upcoming releases.
 2. **Single-Threaded HNSW Construction**: HNSW graph insertion executes sequentially on a single thread. Parallel graph construction is planned for future minor releases.

@@ -77,7 +77,7 @@ impl Modify for SecurityAddon {
     ),
     info(
         title = "Vecta REST API",
-        version = "0.1.0",
+        version = "1.1.0",
         description = "High-performance vector database engine built in pure Rust. Benchmarked against FAISS."
     )
 )]
