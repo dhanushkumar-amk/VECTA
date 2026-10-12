@@ -186,6 +186,16 @@ To deploy on Vercel:
 
 ## 📊 Rigorous Benchmarks vs. Meta FAISS
 
+### 🎨 Handwritten Benchmark Showdown & Analysis
+
+<div align="center">
+
+<img src="assets/vecta_benchmark_handwritten.png" width="900" alt="Handwritten Benchmark Showdown: Vecta vs Meta FAISS" />
+
+</div>
+
+### Master Recall vs. Throughput Curves
+
 <div align="center">
 
 <img src="benchmarks/charts/recall_qps_overview.png" width="900" alt="Vecta vs. Meta FAISS Master Benchmark Overview" />
@@ -227,6 +237,22 @@ Vecta's pure-Rust engine closely tracks FAISS across exact Flat, IVF, and HNSW r
 
 ## 🏗️ Architecture & Internals
 
+### 📐 High-Level Design (HLD)
+
+<div align="center">
+
+<img src="assets/vecta_hld_handwritten.png" width="900" alt="Vecta High-Level Design (HLD) Architecture" />
+
+</div>
+
+#### System Architectural Layers:
+1. **Client Layer**: Native Python scripts (PyO3 bindings), LangChain RAG chains (`VectaVectorStore`), and external HTTP clients (cURL, Web UI, Python SDK).
+2. **Ingress & Interface Layer**: 
+   - **Embedded Mode**: Zero-overhead CPython FFI via PyO3 with explicit GIL release (`Python::allow_threads`) and zero-copy NumPy buffer sharing.
+   - **Standalone Server**: High-throughput Axum daemon backed by Tokio async runtime, featuring Bearer token auth, OpenAPI Swagger UI (`/docs`), and background checkpointing.
+3. **Vecta Core Engine**: Four algorithmic indexing engines (`FlatIndex`, `IVFIndex`, `HnswIndex`, `IVFPQIndex`) built from scratch in pure Rust with zero external C/C++ dependencies.
+4. **Storage & Durability**: Append-only Write-Ahead Logging (WAL) with CRC32 checksum verification, OS memory-mapped I/O (`mmap`), and Bincode snapshot checkpointing.
+
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           CLIENT APPLICATIONS                               │
@@ -260,6 +286,55 @@ Vecta's pure-Rust engine closely tracks FAISS across exact Flat, IVF, and HNSW r
 │  - ShardedFlatIndex (Hash-based partitioning + parallel fan-out search)     │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+### 🔬 Low-Level Design (LLD) & Data Structures
+
+<div align="center">
+
+<img src="assets/vecta_lld_handwritten.png" width="900" alt="Vecta Low-Level Design (LLD) & Data Structures" />
+
+</div>
+
+#### Core In-Memory Layout & Internals:
+- **`FlatIndex` Struct**: Flat contiguous buffer of single-precision floats (`Vec<f32>`), 64-bit point identifiers (`Vec<u64>`), with SIMD-accelerated Euclidean ($L_2$) and Dot product distance kernels. Backed by optional zero-copy `mmap`.
+- **`IVFIndex` Struct**: Centroid codebook array ($k \times D$), posting lists mapping cluster IDs to vector payloads (`HashMap<usize, Vec<(u64, Vec<f32>)>>`), trained via Lloyd's $k$-means clustering.
+- **`HnswIndex` Struct**: Multi-layer skip-graph hierarchy (`layers[0..L]`), top-level entry point (`ep`), adjacency neighbor lists (`Vec<u64>`) with heuristic neighbor selection and edge pruning.
+- **`IVFPQIndex` Struct**: Residual vector quantization into $M=8$ sub-vectors, 256-centroid sub-quantizer codebooks, and Asymmetric Distance Computation (ADC) lookup tables for sub-millisecond evaluation without decompression.
+- **WAL Binary Frame Format**: 21-byte header plus raw vector payload:
+  `[ CRC32: 4 Bytes | OpCode: 1 Byte | PointID: 8 Bytes | PayloadLen: 4 Bytes | Vector Bytes: 4*D Bytes ]`
+- **Bounded Top-$K$ Heap**: Min-max priority queue (`std::collections::BinaryHeap`) maintaining strictly $K$ candidate nearest neighbors.
+
+---
+
+### 🔄 Life of a Vector: Ingestion & Query Pathways
+
+<div align="center">
+
+<img src="assets/vecta_pipeline_handwritten.png" width="900" alt="Life of a Vector: Ingestion and Query Pathways" />
+
+</div>
+
+#### Workflow Breakdown:
+- **Write / Ingestion Pathway**:
+  1. **Ingress**: Request received via Axum REST handler or PyO3 Python binding.
+  2. **Durability**: Payload appended to on-disk Write-Ahead Log (WAL) with 32-bit CRC checksumming.
+  3. **Routing**: Point routed to target index:
+     - **Flat**: Contiguous append to `Vec<f32>` memory buffer.
+     - **IVF**: Nearest centroid identified via coarse quantizer; appended to inverted posting list.
+     - **HNSW**: Greedy search from graph top layer down to assigned level; $M$ bi-directional links formed with heuristic pruning.
+     - **IVFPQ**: Vector broken into 8 sub-vectors; mapped to nearest sub-centroid byte codes in codebook.
+- **Read / Query Search Pathway**:
+  1. **Query Entry**: Search vector $\vec{q}$ and target $k$ received.
+  2. **Index Search Kernel**:
+     - **Flat**: Full scan over all vectors using SIMD $L_2$/Dot kernel.
+     - **IVF**: Distance computed against centroids to select top $nprobe$ inverted lists for inspection.
+     - **HNSW**: Greedy beam search starting at entry point across layers, down to layer 0 with candidate queue `ef_search`.
+     - **IVFPQ**: Precomputed Asymmetric Distance Computation (ADC) lookup table generated for query $\vec{q}$; fast byte-code table lookups.
+  3. **Candidate Selection**: Candidates pushed to bounded top-$k$ min-max heap.
+  4. **Metadata Filtering**: Optional boolean filter AST predicates evaluated against candidate metadata.
+  5. **Response**: Final ordered top-$k$ neighbors returned with distance scores.
 
 - **Write-Ahead Logging (WAL)**: `FlatIndex` mutations are appended to an on-disk write-ahead log with 32-bit CRC checksums before updating memory state. If the process is terminated ungracefully, the log automatically replays on restart.
 - **Interactive OpenAPI Documentation**: Built-in Swagger UI at `/docs` serves OpenAPI 3.0.3 definitions with schema inspection for every request and response model.
