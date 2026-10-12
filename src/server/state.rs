@@ -119,13 +119,23 @@ impl AppState {
     }
 
     /// Path to a collection's binary snapshot file (`<data_dir>/<name>.vcta`).
+    /// Sanitizes against directory traversal (CWE-22 defense-in-depth).
     pub fn collection_file_path(&self, name: &str) -> PathBuf {
-        self.data_dir.join(format!("{}.vcta", name))
+        let clean_name = Path::new(name)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("default");
+        self.data_dir.join(format!("{}.vcta", clean_name))
     }
 
     /// Path to a collection's write-ahead log (`<data_dir>/<name>.wal`).
+    /// Sanitizes against directory traversal (CWE-22 defense-in-depth).
     pub fn wal_file_path(&self, name: &str) -> PathBuf {
-        self.data_dir.join(format!("{}.wal", name))
+        let clean_name = Path::new(name)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("default");
+        self.data_dir.join(format!("{}.wal", clean_name))
     }
 
     /// Save a snapshot of a specific collection to disk.

@@ -50,7 +50,93 @@ impl IntoResponse for AppError {
     }
 }
 
-/// Axum middleware enforcing Bearer API key authentication.
+/// Constant-time byte slice comparison to mitigate timing side-channel attacks (CWE-208 / CWE-385)
+/// against API authentication tokens.
+#[inline(never)]
+fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Security limits protecting against Algorithmic Complexity and Denial of Service (DoS) attacks.
+pub const MAX_SEARCH_K: usize = 10_000;
+pub const MAX_EF_SEARCH: usize = 2_048;
+pub const MAX_VECTOR_DIM: usize = 65_536;
+pub const MAX_COLLECTION_NAME_LEN: usize = 64;
+
+/// Validate collection name to prevent path traversal (CWE-22) and filesystem tampering.
+pub fn validate_collection_name(name: &str) -> Result<(), AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest("collection name cannot be empty".to_string()));
+    }
+    if trimmed.len() > MAX_COLLECTION_NAME_LEN {
+        return Err(AppError::BadRequest(format!(
+            "collection name exceeds maximum security length of {} characters",
+            MAX_COLLECTION_NAME_LEN
+        )));
+    }
+    if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(AppError::BadRequest(
+            "collection name contains forbidden characters; only alphanumeric, '_', and '-' are allowed (path traversal mitigation)".to_string(),
+        ));
+    }
+    if trimmed.starts_with('.') || trimmed.contains("..") {
+        return Err(AppError::BadRequest(
+            "path traversal sequence detected in collection name".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate vector floating-point elements to prevent NaN/Infinity poisoning and arithmetic exploits.
+pub fn validate_vector_values(vector: &[f32]) -> Result<(), AppError> {
+    if vector.is_empty() {
+        return Err(AppError::BadRequest("vector cannot be empty".to_string()));
+    }
+    for (idx, &val) in vector.iter().enumerate() {
+        if !val.is_finite() {
+            return Err(AppError::BadRequest(format!(
+                "adversarial / invalid float at index {}: NaN and Infinity are prohibited",
+                idx
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validate query parameters to defend against Algorithmic Complexity DoS (CWE-400).
+pub fn validate_search_params(k: usize, ef_search: Option<usize>) -> Result<(), AppError> {
+    if k == 0 {
+        return Err(AppError::BadRequest("k must be greater than 0".to_string()));
+    }
+    if k > MAX_SEARCH_K {
+        return Err(AppError::BadRequest(format!(
+            "k parameter {} exceeds maximum threshold of {} (DoS mitigation)",
+            k, MAX_SEARCH_K
+        )));
+    }
+    if let Some(ef) = ef_search {
+        if ef == 0 {
+            return Err(AppError::BadRequest("ef_search must be greater than 0".to_string()));
+        }
+        if ef > MAX_EF_SEARCH {
+            return Err(AppError::BadRequest(format!(
+                "ef_search parameter {} exceeds maximum threshold of {} (DoS mitigation)",
+                ef, MAX_EF_SEARCH
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Axum middleware enforcing Bearer API key authentication with constant-time comparison.
 ///
 /// If `state.api_key` is None, authentication is bypassed (local development mode).
 /// If `state.api_key` is Some(key), incoming requests must provide an `Authorization: Bearer <key>`
@@ -69,7 +155,7 @@ pub async fn auth_middleware(
         let authorized = match auth_header {
             Some(val) if val.starts_with("Bearer ") => {
                 let token = val[7..].trim();
-                token == expected_key
+                constant_time_compare(token.as_bytes(), expected_key.as_bytes())
             }
             _ => false,
         };
@@ -145,16 +231,19 @@ pub async fn create_collection_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateCollectionRequest>,
 ) -> Result<(StatusCode, Json<CollectionInfo>), AppError> {
-    if req.name.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "collection name cannot be empty".to_string(),
-        ));
-    }
+    validate_collection_name(&req.name)?;
 
     if req.dim == 0 {
         return Err(AppError::BadRequest(
             "vector dimension must be greater than 0".to_string(),
         ));
+    }
+
+    if req.dim > MAX_VECTOR_DIM {
+        return Err(AppError::BadRequest(format!(
+            "vector dimension {} exceeds security limit of {} (DoS mitigation)",
+            req.dim, MAX_VECTOR_DIM
+        )));
     }
 
     let metric = parse_metric(&req.metric)?;
@@ -275,6 +364,7 @@ pub async fn get_collection_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<CollectionInfo>, AppError> {
+    validate_collection_name(&name)?;
     let registry = state
         .collections
         .read()
@@ -316,6 +406,7 @@ pub async fn delete_collection_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    validate_collection_name(&name)?;
     let mut registry = state
         .collections
         .write()
@@ -356,6 +447,7 @@ pub async fn checkpoint_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    validate_collection_name(&name)?;
     state.checkpoint_collection(&name).map_err(|e| {
         if e.contains("not found") {
             AppError::NotFound(e)
@@ -392,6 +484,9 @@ pub async fn insert_point_handler(
     Path(name): Path<String>,
     Json(req): Json<InsertPointRequest>,
 ) -> Result<StatusCode, AppError> {
+    validate_collection_name(&name)?;
+    validate_vector_values(&req.vector)?;
+
     let mut registry = state
         .collections
         .write()
@@ -478,6 +573,10 @@ pub async fn search_handler(
     Path(name): Path<String>,
     Json(req): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, AppError> {
+    validate_collection_name(&name)?;
+    validate_vector_values(&req.vector)?;
+    validate_search_params(req.k, req.ef_search)?;
+
     let registry = state
         .collections
         .read()

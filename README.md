@@ -186,11 +186,11 @@ To deploy on Vercel:
 
 ## 📊 Rigorous Benchmarks vs. Meta FAISS
 
-### 🎨 Handwritten Benchmark Showdown & Analysis
+### 📈 Benchmark Showdown & Comparative Analysis
 
 <div align="center">
 
-<img src="assets/vecta_benchmark_handwritten.png" width="900" alt="Handwritten Benchmark Showdown: Vecta vs Meta FAISS" />
+<img src="assets/vecta_benchmark.png" width="900" alt="Benchmark Showdown: Vecta vs Meta FAISS" />
 
 </div>
 
@@ -211,6 +211,12 @@ Vecta's pure-Rust engine closely tracks FAISS across exact Flat, IVF, and HNSW r
 ---
 
 ### Master Head-to-Head Comparison Table
+
+<div align="center">
+
+<img src="assets/vecta_master_table.png" width="900" alt="Master Head-to-Head Benchmark Table: Vecta vs FAISS" />
+
+</div>
 
 ```text
 ======================================================================================================================
@@ -241,7 +247,7 @@ Vecta's pure-Rust engine closely tracks FAISS across exact Flat, IVF, and HNSW r
 
 <div align="center">
 
-<img src="assets/vecta_hld_handwritten.png" width="900" alt="Vecta High-Level Design (HLD) Architecture" />
+<img src="assets/vecta_hld.png" width="900" alt="Vecta High-Level Design (HLD) Architecture" />
 
 </div>
 
@@ -293,7 +299,7 @@ Vecta's pure-Rust engine closely tracks FAISS across exact Flat, IVF, and HNSW r
 
 <div align="center">
 
-<img src="assets/vecta_lld_handwritten.png" width="900" alt="Vecta Low-Level Design (LLD) & Data Structures" />
+<img src="assets/vecta_lld.png" width="900" alt="Vecta Low-Level Design (LLD) & Data Structures" />
 
 </div>
 
@@ -312,7 +318,7 @@ Vecta's pure-Rust engine closely tracks FAISS across exact Flat, IVF, and HNSW r
 
 <div align="center">
 
-<img src="assets/vecta_pipeline_handwritten.png" width="900" alt="Life of a Vector: Ingestion and Query Pathways" />
+<img src="assets/vecta_pipeline.png" width="900" alt="Life of a Vector: Ingestion and Query Pathways" />
 
 </div>
 
@@ -371,6 +377,30 @@ relevant_docs = retriever.invoke("How is the vector database implemented?")
 for doc in relevant_docs:
     print(f"Content: {doc.page_content} | Metadata: {doc.metadata}")
 ```
+
+---
+
+## 🛡️ Cybersecurity Architecture & Attack Prevention Matrix
+
+<div align="center">
+
+<img src="assets/vecta_cybersecurity.png" width="900" alt="Vecta Cybersecurity Threat Model & Attack Prevention Matrix" />
+
+</div>
+
+### Threat Vectors & Defense Mechanisms
+
+Vector databases and AI retrieval engines face distinct attack surfaces ranging from classic network vulnerabilities to algorithmic complexity denial-of-service and adversarial embedding injection. Vecta incorporates defense-in-depth security gates directly into its core engine and REST ingress:
+
+| Threat Category | Attack Vector & Potential Impact | Common Weakness Enumeration | Vecta Defense Gate & Mitigation |
+| :--- | :--- | :--- | :--- |
+| **Authentication Side-Channel** | **Timing Attacks on API Keys**: Remote attackers measure microsecond network latency variations during string comparison to guess API secret keys byte-by-byte. | **CWE-208 / CWE-385** | **Constant-Time Comparison**: `constant_time_compare` performs $O(1)$ byte-level XOR accumulation across the full token buffer, preventing secret-dependent timing leakage. |
+| **Filesystem & Persistence** | **Path Traversal / Directory Escape**: Malicious collection names like `../../etc/shadow` or `..\..\system32` aimed at overwriting or deleting arbitrary host files during checkpointing. | **CWE-22 / CWE-73** | **Strict Whitelist & Path Sanitization**: Collection names are restricted to alphanumeric ASCII, `_`, and `-` (max 64 chars); dot prefixes are rejected, and `Path::file_name` provides isolated sandboxing. |
+| **Data Poisoning & Arithmetic** | **Adversarial NaN / Infinity Floats**: Ingesting non-finite floating point vectors causes undefined behavior in distance kernels, corrupts $k$-means centroids, and crashes sorting heaps. | **CWE-20** | **Strict IEEE 754 Float Validation**: Every float component is inspected with `.is_finite()` at both ingestion (`POST /points`) and query (`POST /search`) entry points. Non-finite values are rejected with HTTP 400. |
+| **Denial of Service (DoS)** | **Algorithmic Complexity Attacks**: Sending astronomical $k$ values ($k = 10^8$), pathological `ef_search`, or massive vector dimensions to cause CPU starvation and heap OOM. | **CWE-400** | **Bounded Query Guardrails**: Hard limits enforced: $K \le 10,000$, `ef_search` $\le 2,048$, and vector dimensions $D \le 65,536$. |
+| **Data Tampering & Silent Corruption** | **WAL Tampering / Bit-Rot**: Incomplete disk writes, power failures, or malicious file edits corrupting database state. | **CWE-353 / CWE-354** | **CRC32 Checksummed Frames**: Every Write-Ahead Log record carries a 32-bit CRC checksum. Recovery verifies integrity before applying mutations; corrupted frames halt replay safely. |
+| **Memory Safety & Exploitation** | **Buffer Overflows & Use-After-Free**: Exploiting memory management bugs in C/C++ BLAS libraries to achieve arbitrary code execution. | **CWE-119 / CWE-120** | **Pure Safe Rust Guarantee**: Algorithmic indexing core contains zero `unsafe` blocks in vector math, backed by Rust’s compile-time ownership and borrow checker guarantees. |
+| **AI Retrieval Hijacking** | **RAG Indirect Prompt Injection**: Adversarial documents crafted to retrieve high-ranking false contexts and hijack downstream LLM instructions. | **OWASP Top 10 for LLM (LLM01 / LLM04)** | **Metadata AST Sandboxing**: Structured boolean query filtering isolates retrieved contexts by tenant, document category, or permission scope before passing to LLM prompts. |
 
 ---
 
